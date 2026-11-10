@@ -1,0 +1,70 @@
+# Startup order: postgres (healthy) -> migrate (goose up), redis (healthy) -> api.
+services:
+  postgres:
+    image: postgres:18
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: movie
+      POSTGRES_PASSWORD: movie
+      POSTGRES_DB: movie
+    ports:
+      - "5432:5432"
+    volumes:
+      - volume_pgdata:/var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blog -d blog"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+    networks:
+      - app-network
+
+  redis:
+    image: redis:8-alpine
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - app-network
+
+  redisinsight:
+    image: redislabs/redisinsight:3.4.1
+    container_name: redisinsight
+    restart: always
+    ports:
+      - "5540:5540"
+    networks:
+      - app-network
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    container_name: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgres://movie:movie@postgres:5432/movie?sslmode=disable
+    command: ["up"]
+    restart: "no"
+    networks:
+      - app-network
+
+volumes:
+  volume_pgdata:
+    name: pgdata
+
+networks:
+  app-network:
+    name: app-network
+    driver: bridge
