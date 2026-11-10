@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+tmp/
+main
+*.test
+*.out
+.air.toml
+build-errors.log

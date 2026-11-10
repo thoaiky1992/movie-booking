@@ -1,0 +1,165 @@
+# Local topology.
+# Startup order: postgres (healthy) -> migrate (goose up) -> api, worker.
+#                redis (healthy) -> api, worker.   kafka -> worker.
+#
+# Host ports default to the usual values; override with POSTGRES_HOST_PORT, REDIS_HOST_PORT, API_HOST_PORT, ...
+# when another stack already uses them.
+x-app-env: &app-env
+  APP_ENV: local
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://movie:movie@postgres:5432/movie?sslmode=disable
+  REDIS_ADDR: redis:6379
+  REDIS_PASSWORD: ""
+  REDIS_DB: 0
+  KAFKA_BROKERS: kafka:29092
+  SEAT_HOLD_TTL: 10m
+  CURRENCY: VND
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: movie_booking_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: movie
+      POSTGRES_PASSWORD: movie
+      POSTGRES_DB: movie
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - movie_booking_pgdata:/var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U movie -d movie"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - app-network
+
+  redis:
+    image: redis:8-alpine
+    restart: always
+    container_name: movie_booking_redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - app-network
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: movie_booking_kafka
+    restart: always
+    ports:
+      - "${KAFKA_HOST_PORT:-9092}:9092"   # host clients (go run on your machine)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT_HOST://:9092,PLAINTEXT://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092},PLAINTEXT://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - app-network
+
+  redisinsight:
+    image: redislabs/redisinsight:3.4.1
+    container_name: movie_booking_redisinsight
+    restart: always
+    ports:
+      - "${REDISINSIGHT_HOST_PORT:-5540}:5540"
+    networks:
+      - app-network
+
+  swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    container_name: movie_booking_swagger_ui
+    restart: unless-stopped
+    environment:
+      SWAGGER_JSON: /spec/openapi.yaml
+    volumes:
+      - ./openapi.yaml:/spec/openapi.yaml:ro
+    ports:
+      - "${SWAGGER_HOST_PORT:-8081}:8080"
+    networks:
+      - app-network
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    container_name: movie_booking_migrate
+    command: ["up"]
+    environment:
+      DATABASE_URL: postgres://movie:movie@postgres:5432/movie?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  api:
+    build:
+      context: .
+      target: api
+    container_name: movie_booking_api
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      HTTP_ADDR: ":8080"
+      CORS_ALLOWED_ORIGINS: "http://localhost:5173"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    networks:
+      - app-network
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: movie_booking_worker
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      <<: *app-env
+      KAFKA_BOOKING_TOPIC: booking.events
+      KAFKA_NOTIFICATION_DLQ_TOPIC: notification.dlq
+      KAFKA_NOTIFICATION_GROUP: notification-service
+    networks:
+      - app-network
+
+volumes:
+  # Dedicated volume: never share a data directory with another project's Postgres.
+  movie_booking_pgdata:
+
+networks:
+  app-network:
+    driver: bridge

@@ -1,0 +1,278 @@
+openapi: 3.0.3
+info:
+  title: Movie Booking API
+  version: 1.0.0
+  description: |
+    Catalogue, seat holds, payments and cancellations.
+    Customer endpoints identify the caller with the `X-User-ID` header (placeholder for a verified JWT at the gateway).
+servers:
+  - url: http://localhost:8080
+components:
+  parameters:
+    UserId:
+      name: X-User-ID
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: seat_unavailable }
+            message: { type: string }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+    Seat:
+      type: object
+      properties:
+        seat_id: { type: string, format: uuid }
+        row_label: { type: string, example: "A" }
+        seat_number: { type: integer, example: 5 }
+        seat_type: { type: string, enum: [STANDARD, VIP, COUPLE] }
+        price_cents: { type: integer, format: int64 }
+    Booking:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [HELD, CONFIRMED, CANCELLED, EXPIRED] }
+        showtime_id: { type: string, format: uuid }
+        movie_title: { type: string }
+        cinema_name: { type: string }
+        hall_name: { type: string }
+        starts_at: { type: string, format: date-time }
+        seats:
+          type: array
+          items: { $ref: '#/components/schemas/Seat' }
+        total_cents: { type: integer, format: int64 }
+        currency: { type: string, example: VND }
+        ticket_code: { type: string }
+        expires_at: { type: string, format: date-time, description: Hold deadline; present while HELD }
+        confirmed_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time }
+        payment:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            status: { type: string, enum: [PENDING, SUCCEEDED, FAILED, REFUND_PENDING, REFUNDED, NO_REFUND] }
+            amount_cents: { type: integer, format: int64 }
+            refund_cents: { type: integer, format: int64 }
+    SeatStatus:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        row_label: { type: string }
+        seat_number: { type: integer }
+        seat_type: { type: string }
+        status: { type: string, enum: [AVAILABLE, HELD, SOLD] }
+        price_cents: { type: integer, format: int64 }
+paths:
+  /health:
+    get:
+      summary: Liveness and dependency readiness
+      responses:
+        '200': { description: All dependencies up }
+        '503': { description: One or more dependencies down }
+  /api/v1/users:
+    post:
+      summary: Register a customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, full_name]
+              properties:
+                email: { type: string, format: email }
+                full_name: { type: string }
+      responses:
+        '201': { description: Created }
+        '400': { description: Invalid input, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/v1/movies:
+    get:
+      summary: Search and filter movies
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Title substring }
+        - { name: genre, in: query, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200': { description: A page of movies }
+  /api/v1/movies/{id}:
+    get:
+      summary: Movie details with third-party ratings (never calls a partner synchronously)
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: Movie and ratings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  movie: { type: object }
+                  ratings:
+                    type: object
+                    properties:
+                      status: { type: string, enum: [cache, database, unavailable], description: Where the ratings came from }
+                      sources:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            source: { type: string, example: IMDb }
+                            value: { type: number, example: 8.8 }
+                            scale: { type: number, example: 10 }
+                            votes: { type: integer }
+                      updated_at: { type: string, format: date-time }
+        '404': { description: Not found }
+  /api/v1/cinemas:
+    get:
+      summary: List cinemas
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200': { description: A page of cinemas }
+  /api/v1/cinemas/{id}/halls:
+    get:
+      summary: List halls of a cinema
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200': { description: Halls }
+        '404': { description: Cinema not found }
+  /api/v1/showtimes:
+    get:
+      summary: Search showtimes
+      parameters:
+        - { name: movie_id, in: query, schema: { type: string, format: uuid } }
+        - { name: cinema_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200': { description: A page of showtimes }
+        '400': { description: Invalid filter }
+  /api/v1/showtimes/{id}/seats:
+    get:
+      summary: Seat map with live status (AVAILABLE, HELD, SOLD)
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: Seat map
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  showtime: { type: object }
+                  seats:
+                    type: array
+                    items: { $ref: '#/components/schemas/SeatStatus' }
+  /api/v1/showtimes/{id}/holds:
+    post:
+      summary: Hold seats for the caller (TTL 10 min by default)
+      description: |
+        Atomically locks every requested seat or none. Returns 409 if any seat is taken.
+        The hold must be paid before `expires_at`, otherwise the seats are released.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seat_ids]
+              properties:
+                seat_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Seats held
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '400': { description: Invalid seats for this showtime }
+        '409': { description: Seat unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '410': { description: Showtime already started }
+  /api/v1/bookings/{id}:
+    get:
+      summary: Get a booking owned by the caller
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: Booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '404': { description: Not found (also returned for other users' bookings) }
+  /api/v1/bookings/{id}/payments:
+    post:
+      summary: Pay for a held booking and confirm it
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: Booking confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '402': { description: Payment declined }
+        '409': { description: Payment already in progress or booking not payable }
+        '410': { description: Hold expired; any charge is refunded automatically }
+  /api/v1/bookings/{id}/cancel:
+    post:
+      summary: Cancel a held or confirmed booking
+      description: |
+        Releases the seats. Confirmed bookings are refunded per policy:
+        100% if the showtime is 24h+ away, 50% if 2–24h away, 0% under 2h.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking_id: { type: string, format: uuid }
+                  status: { type: string, example: CANCELLED }
+                  refund_cents: { type: integer, format: int64 }
+                  refund_status: { type: string, enum: [NONE, PENDING, REFUNDED] }
+        '409': { description: Booking cannot be cancelled in its current state }
