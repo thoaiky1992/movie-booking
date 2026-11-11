@@ -151,8 +151,52 @@ CREATE UNIQUE INDEX uq_payments_provider_transaction
     ON payments(provider, provider_transaction_id)
     WHERE provider_transaction_id IS NOT NULL;
 
+-- 11. Movie detailed metadata (1:1 with movies)
+CREATE TABLE movie_details (
+    movie_id BIGINT PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE,
+    synopsis TEXT,
+    director VARCHAR(255),
+    cast_members TEXT,
+    genres VARCHAR(255),
+    poster_url VARCHAR(500),
+    trailer_url VARCHAR(500),
+    release_date DATE,
+    age_rating VARCHAR(10),
+    original_language VARCHAR(50),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 12. External partner rating snapshots (1:N with movies)
+CREATE TABLE movie_external_ratings (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    movie_id BIGINT NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+    source VARCHAR(50) NOT NULL,
+    rating_score NUMERIC(5,2) NOT NULL,
+    max_score NUMERIC(5,2) NOT NULL,
+    vote_count BIGINT,
+    external_url VARCHAR(500),
+    last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Constraints
+    CONSTRAINT uq_movie_external_source UNIQUE (movie_id, source),
+    CONSTRAINT ck_rating_score_valid CHECK (rating_score >= 0 AND rating_score <= max_score)
+);
+
+CREATE INDEX idx_movie_external_ratings_movie ON movie_external_ratings(movie_id);
+CREATE INDEX idx_movie_external_ratings_sync ON movie_external_ratings(last_synced_at);
+
+COMMENT ON COLUMN movie_details.synopsis IS 'Short description of the movie plot';
+COMMENT ON COLUMN movie_details.age_rating IS 'Movie age rating, for example G, PG, PG-13, R, or NC-17';
+COMMENT ON COLUMN movie_external_ratings.source IS 'External rating source, for example IMDb or Rotten Tomatoes';
+COMMENT ON COLUMN movie_external_ratings.rating_score IS 'Rating score reported by the external source';
+COMMENT ON COLUMN movie_external_ratings.max_score IS 'Maximum score used by the external source';
+COMMENT ON COLUMN movie_external_ratings.vote_count IS 'Vote count when provided by the external source';
+COMMENT ON COLUMN movie_external_ratings.external_url IS 'URL of the external rating page';
+COMMENT ON COLUMN movie_external_ratings.last_synced_at IS 'Time the rating was last synchronized';
 
 -- +goose Down
+DROP TABLE IF EXISTS movie_external_ratings;
+DROP TABLE IF EXISTS movie_details;
 DROP TABLE IF EXISTS payments;
 DROP TABLE IF EXISTS seat_claims;
 DROP TABLE IF EXISTS booking_items;

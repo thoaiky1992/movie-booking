@@ -60,6 +60,32 @@ services:
     networks:
       - app-network
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    container_name: api
+    restart: unless-stopped
+    env_file:
+      - .env
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+        reservations:
+          cpus: "2"
+          memory: 256M
+    ports:
+      - "8080:8080"
+    networks:
+      - app-network
+
 volumes:
   volume_pgdata:
     name: pgdata

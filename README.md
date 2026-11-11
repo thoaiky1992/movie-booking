@@ -70,6 +70,50 @@ for example:
 make migration-status GOOSE=goose
 ```
 
+## Catalog APIs
+
+The read-only catalog endpoints are served under `/api/v1`:
+
+```text
+GET /api/v1/cinemas
+GET /api/v1/cinemas/:cinemaID/movies
+GET /api/v1/movies/:movieID
+GET /api/v1/cinemas/:cinemaID/movies/:movieID/showtimes
+GET /api/v1/showtimes/:showtimeID/seats
+```
+
+The seat-map endpoint returns seats grouped by row. Seat status is one of
+`AVAILABLE`, `HELD`, or `BOOKED`; an expired hold is treated as available.
+The movie-detail endpoint includes the `external_ratings` array.
+
+All successful API responses use the same envelope:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "trace_id": "8bc0d82e5c33435eb1d9f4ecbd1f8682"
+}
+```
+
+Errors use a separate, consistent envelope:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "SHOWTIME_NOT_FOUND",
+    "message": "showtime not found"
+  },
+  "trace_id": "8bc0d82e5c33435eb1d9f4ecbd1f8682"
+}
+```
+
+The API accepts an optional `X-Trace-ID` request header and always returns it
+in both the response header and body. Access, error, and lifecycle logs are
+written as JSON and include `trace_id` for request-scoped entries. Set
+`LOG_LEVEL` to `debug`, `info` (default), `warn`, or `error`.
+
 Live reload the application:
 ```bash
 make watch

@@ -22,6 +22,13 @@ type Service interface {
 	// Close terminates the database connection.
 	// It returns an error if the connection cannot be closed.
 	Close() error
+
+	// DB exposes the connection pool to infrastructure repositories.
+	DB() *sql.DB
+}
+
+func (s *service) DB() *sql.DB {
+	return s.db
 }
 
 type service struct {
