@@ -57,6 +57,11 @@ func (s *Server) RegisterRoutes() http.Handler {
 			httpdelivery.AuthMiddleware(s.userRepository),
 			s.bookingHandler.HoldSeats,
 		)
+		api.POST(
+			"/bookings/:bookingID/cancel",
+			httpdelivery.AuthMiddleware(s.userRepository),
+			s.bookingHandler.CancelBooking,
+		)
 	}
 
 	return r

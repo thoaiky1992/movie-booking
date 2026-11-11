@@ -111,6 +111,38 @@ func (s *BookingService) HoldSeats(
 	return nil, fmt.Errorf("hold seats: %w", err)
 }
 
+func (s *BookingService) CancelBooking(
+	ctx context.Context,
+	userID, bookingID int64,
+) (*domain.CancelledBooking, error) {
+	if userID <= 0 || bookingID <= 0 {
+		return nil, domain.ErrInvalidBookingID
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	cancelled, err := s.repository.CancelBooking(ctx, userID, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("cancel booking: %w", err)
+	}
+
+	if s.locker != nil && cancelled.HoldToken != "" && len(cancelled.SeatIDs) > 0 {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), time.Second)
+		releaseErr := s.locker.Release(
+			releaseCtx,
+			cancelled.ShowtimeID,
+			cancelled.SeatIDs,
+			cancelled.HoldToken,
+		)
+		releaseCancel()
+		if releaseErr != nil {
+			// PostgreSQL is authoritative; Redis TTL still bounds a stale lock.
+			s.logger.Warn("redis_cancelled_hold_release_failed", "error", releaseErr)
+		}
+	}
+	return cancelled, nil
+}
+
 func normalizeAndValidateHold(userID, showtimeID int64, seatIDs []int64) ([]int64, error) {
 	if userID <= 0 || showtimeID <= 0 || len(seatIDs) == 0 ||
 		len(seatIDs) > domain.MaxSeatsPerHold {

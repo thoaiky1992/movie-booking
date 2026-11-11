@@ -13,14 +13,27 @@ import (
 )
 
 type bookingRepositoryStub struct {
-	hold       *domain.SeatHold
-	err        error
-	userID     int64
-	showtimeID int64
-	seatIDs    []int64
-	holdToken  string
-	ttl        time.Duration
-	called     bool
+	hold            *domain.SeatHold
+	err             error
+	userID          int64
+	showtimeID      int64
+	seatIDs         []int64
+	holdToken       string
+	ttl             time.Duration
+	called          bool
+	cancelled       *domain.CancelledBooking
+	cancelErr       error
+	cancelUserID    int64
+	cancelBookingID int64
+}
+
+func (s *bookingRepositoryStub) CancelBooking(
+	_ context.Context,
+	userID, bookingID int64,
+) (*domain.CancelledBooking, error) {
+	s.cancelUserID = userID
+	s.cancelBookingID = bookingID
+	return s.cancelled, s.cancelErr
 }
 
 func (s *bookingRepositoryStub) HoldSeats(
@@ -161,5 +174,34 @@ func TestHoldSeatsRejectsDuplicateSeats(t *testing.T) {
 	_, err := service.HoldSeats(context.Background(), 2, 3, []int64{4, 4})
 	if !errors.Is(err, domain.ErrInvalidSeatHold) {
 		t.Fatalf("error = %v, want ErrInvalidSeatHold", err)
+	}
+}
+
+func TestCancelBookingReleasesRedisHold(t *testing.T) {
+	repository := &bookingRepositoryStub{cancelled: &domain.CancelledBooking{
+		BookingID: 7, ShowtimeID: 3, SeatIDs: []int64{4, 5},
+		Status: "CANCELLED", HoldToken: "hold-token",
+	}}
+	locker := &seatLockerStub{}
+	service := NewBookingService(repository, locker, testLogger(), time.Minute)
+
+	cancelled, err := service.CancelBooking(context.Background(), 2, 7)
+	if err != nil {
+		t.Fatalf("CancelBooking() error = %v", err)
+	}
+	if cancelled.Status != "CANCELLED" || repository.cancelUserID != 2 || repository.cancelBookingID != 7 {
+		t.Fatalf("unexpected cancellation: %+v", cancelled)
+	}
+	if !locker.releaseCalled || locker.releasedOwner != "hold-token" ||
+		!reflect.DeepEqual(locker.releasedSeats, []int64{4, 5}) {
+		t.Fatalf("Redis release = seats %v owner %q", locker.releasedSeats, locker.releasedOwner)
+	}
+}
+
+func TestCancelBookingRejectsInvalidID(t *testing.T) {
+	service := NewBookingService(&bookingRepositoryStub{}, nil, testLogger(), time.Minute)
+	_, err := service.CancelBooking(context.Background(), 2, 0)
+	if !errors.Is(err, domain.ErrInvalidBookingID) {
+		t.Fatalf("error = %v, want ErrInvalidBookingID", err)
 	}
 }

@@ -27,6 +27,16 @@ type bookingUseCaseStub struct {
 	userID     int64
 	showtimeID int64
 	seatIDs    []int64
+	bookingID  int64
+}
+
+func (s *bookingUseCaseStub) CancelBooking(
+	_ context.Context,
+	userID, bookingID int64,
+) (*domain.CancelledBooking, error) {
+	s.userID = userID
+	s.bookingID = bookingID
+	return &domain.CancelledBooking{BookingID: bookingID, Status: "CANCELLED"}, nil
 }
 
 type userRepositoryStub struct {
@@ -224,6 +234,17 @@ func TestRegisterRoutesExposesNewCatalogAPIs(t *testing.T) {
 			bookingUseCase.showtimeID,
 			bookingUseCase.seatIDs,
 		)
+	}
+
+	cancelRecorder := httptest.NewRecorder()
+	cancelRequest := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/42/cancel", nil)
+	cancelRequest.Header.Set(httpdelivery.UserIDHeader, "10")
+	r.ServeHTTP(cancelRecorder, cancelRequest)
+	if cancelRecorder.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, want %d; body = %s", cancelRecorder.Code, http.StatusOK, cancelRecorder.Body.String())
+	}
+	if bookingUseCase.bookingID != 42 || bookingUseCase.userID != 10 {
+		t.Fatalf("unexpected cancel arguments: user_id=%d booking_id=%d", bookingUseCase.userID, bookingUseCase.bookingID)
 	}
 
 	unauthorizedRecorder := httptest.NewRecorder()

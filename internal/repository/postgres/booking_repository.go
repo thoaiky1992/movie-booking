@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"movie-booking/internal/domain"
@@ -150,6 +151,82 @@ func (r *BookingRepository) HoldSeats(
 		return nil, fmt.Errorf("commit seat hold: %w", err)
 	}
 	return hold, nil
+}
+
+func (r *BookingRepository) CancelBooking(
+	ctx context.Context,
+	userID, bookingID int64,
+) (_ *domain.CancelledBooking, returnErr error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, fmt.Errorf("begin booking cancellation transaction: %w", err)
+	}
+	defer func() {
+		if returnErr != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	cancelled := &domain.CancelledBooking{BookingID: bookingID, Status: "CANCELLED"}
+	var status string
+	err = tx.QueryRowContext(ctx, `
+		SELECT showtime_id, status, COALESCE(hold_token, '')
+		FROM bookings
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE`, bookingID, userID).
+		Scan(&cancelled.ShowtimeID, &status, &cancelled.HoldToken)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrBookingNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load booking for cancellation: %w", err)
+	}
+	if status != "PENDING" {
+		return nil, domain.ErrBookingNotCancellable
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		DELETE FROM seat_claims
+		WHERE booking_id = $1 AND status = 'HELD'
+		RETURNING seat_id`, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("release cancelled booking seats: %w", err)
+	}
+	defer rows.Close() // ensure rows are closed even if we return early
+
+	for rows.Next() {
+		var seatID int64
+		if err := rows.Scan(&seatID); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan cancelled booking seat: %w", err)
+		}
+		cancelled.SeatIDs = append(cancelled.SeatIDs, seatID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read cancelled booking seats: %w", err)
+	}
+	sort.Slice(cancelled.SeatIDs, func(i, j int) bool {
+		return cancelled.SeatIDs[i] < cancelled.SeatIDs[j]
+	})
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE bookings
+		SET status = 'CANCELLED'
+		WHERE id = $1 AND status = 'PENDING'`, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("cancel booking: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("read cancelled booking result: %w", err)
+	}
+	if updated != 1 {
+		return nil, domain.ErrBookingNotCancellable
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit booking cancellation: %w", err)
+	}
+	return cancelled, nil
 }
 
 func (r *BookingRepository) ExpirePendingHolds(

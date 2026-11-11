@@ -17,6 +17,33 @@ type BookingUseCase interface {
 		showtimeID int64,
 		seatIDs []int64,
 	) (*domain.SeatHold, error)
+	CancelBooking(ctx context.Context, userID, bookingID int64) (*domain.CancelledBooking, error)
+}
+
+func (h *BookingHandler) CancelBooking(c *gin.Context) {
+	userID, ok := UserIDFromContext(c.Request.Context())
+	if !ok {
+		RespondError(c, nethttp.StatusUnauthorized, "UNAUTHORIZED", "user identity is missing")
+		return
+	}
+	bookingID, ok := parsePositiveID(c, "bookingID", "INVALID_BOOKING_ID", "booking")
+	if !ok {
+		return
+	}
+
+	cancelled, err := h.useCase.CancelBooking(c.Request.Context(), userID, bookingID)
+	switch {
+	case err == nil:
+		RespondSuccess(c, nethttp.StatusOK, cancelled)
+	case errors.Is(err, domain.ErrInvalidBookingID):
+		RespondError(c, nethttp.StatusBadRequest, "INVALID_BOOKING_ID", err.Error())
+	case errors.Is(err, domain.ErrBookingNotFound):
+		RespondError(c, nethttp.StatusNotFound, "BOOKING_NOT_FOUND", err.Error())
+	case errors.Is(err, domain.ErrBookingNotCancellable):
+		RespondError(c, nethttp.StatusConflict, "BOOKING_NOT_CANCELLABLE", err.Error())
+	default:
+		respondInternalError(c, err)
+	}
 }
 
 type BookingHandler struct {

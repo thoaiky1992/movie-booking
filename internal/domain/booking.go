@@ -7,9 +7,12 @@ import (
 )
 
 var (
-	ErrSeatsUnavailable = errors.New("one or more seats are unavailable")
-	ErrInvalidSeatHold  = errors.New("invalid seat hold request")
-	ErrShowtimeStarted  = errors.New("showtime has already started")
+	ErrSeatsUnavailable      = errors.New("one or more seats are unavailable")
+	ErrInvalidSeatHold       = errors.New("invalid seat hold request")
+	ErrShowtimeStarted       = errors.New("showtime has already started")
+	ErrInvalidBookingID      = errors.New("invalid booking ID")
+	ErrBookingNotFound       = errors.New("booking not found")
+	ErrBookingNotCancellable = errors.New("booking cannot be cancelled")
 )
 
 const MaxSeatsPerHold = 10
@@ -30,6 +33,14 @@ type ReleasedSeat struct {
 	HoldToken  string
 }
 
+type CancelledBooking struct {
+	BookingID  int64   `json:"booking_id"`
+	ShowtimeID int64   `json:"showtime_id"`
+	SeatIDs    []int64 `json:"seat_ids"`
+	Status     string  `json:"status"`
+	HoldToken  string  `json:"-"`
+}
+
 // BookingRepository owns the durable booking invariant. Implementations must
 // claim all requested seats in one transaction or claim none of them.
 type BookingRepository interface {
@@ -41,5 +52,6 @@ type BookingRepository interface {
 		holdToken string,
 		ttl time.Duration,
 	) (*SeatHold, error)
+	CancelBooking(ctx context.Context, userID, bookingID int64) (*CancelledBooking, error)
 	ExpirePendingHolds(ctx context.Context, batchSize int) ([]ReleasedSeat, error)
 }

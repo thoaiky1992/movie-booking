@@ -83,6 +83,7 @@ GET /api/v1/movies/:movieID
 GET /api/v1/cinemas/:cinemaID/movies/:movieID/showtimes
 GET /api/v1/showtimes/:showtimeID/seats
 POST /api/v1/showtimes/:showtimeID/holds
+POST /api/v1/bookings/:bookingID/cancel
 ```
 
 The seat-map endpoint returns seats grouped by row. Seat status is one of
@@ -97,6 +98,17 @@ curl -X POST http://localhost:8080/api/v1/showtimes/12/holds \
   -H 'X-User-ID: 1' \
   -d '{"seat_ids":[1,2]}'
 ```
+
+Cancel a pending booking owned by the authenticated user and release its seats:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/bookings/42/cancel \
+  -H 'X-User-ID: 1'
+```
+
+Only `PENDING` bookings can be cancelled. A booking belonging to another user is
+reported as not found; an already confirmed, cancelled, or expired booking
+returns `409 BOOKING_NOT_CANCELLABLE`.
 
 `X-User-ID` is resolved by HTTP middleware, verified against PostgreSQL, and
 stored in the request context before the booking handler runs. In production,
