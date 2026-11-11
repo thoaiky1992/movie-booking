@@ -10,7 +10,6 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 CREATE TABLE cinemas (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    address TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -30,10 +29,7 @@ CREATE TABLE seats (
     room_id BIGINT NOT NULL REFERENCES rooms(id),
     row_label VARCHAR(10) NOT NULL,
     seat_number INT NOT NULL,
-    seat_type VARCHAR(20) NOT NULL DEFAULT 'STANDARD',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     CONSTRAINT ck_seats_number_positive CHECK (seat_number > 0),
-    CONSTRAINT ck_seats_type CHECK (seat_type IN ('STANDARD', 'VIP', 'COUPLE')),
     CONSTRAINT uq_seats_position UNIQUE (room_id, row_label, seat_number),
     CONSTRAINT uq_seats_id_room UNIQUE (id, room_id)
 );
@@ -55,14 +51,12 @@ CREATE TABLE showtimes (
     room_id BIGINT NOT NULL REFERENCES rooms(id),
     starts_at TIMESTAMPTZ NOT NULL,
     ends_at TIMESTAMPTZ NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED',
     CONSTRAINT ck_showtimes_time CHECK (ends_at > starts_at),
-    CONSTRAINT ck_showtimes_status CHECK (status IN ('SCHEDULED', 'CANCELLED', 'COMPLETED')),
     CONSTRAINT uq_showtimes_id_room UNIQUE (id, room_id),
     CONSTRAINT ex_showtimes_room_overlap EXCLUDE USING GIST (
         room_id WITH =,
         tstzrange(starts_at, ends_at, '[)') WITH &&
-    ) WHERE (status = 'SCHEDULED')
+    )
 );
 CREATE INDEX idx_showtimes_movie_start ON showtimes(movie_id, starts_at);
 CREATE INDEX idx_showtimes_room_start ON showtimes(room_id, starts_at);
@@ -159,4 +153,15 @@ CREATE UNIQUE INDEX uq_payments_provider_transaction
 
 
 -- +goose Down
--- Add statements that reverse the migration above here.
+DROP TABLE IF EXISTS payments;
+DROP TABLE IF EXISTS seat_claims;
+DROP TABLE IF EXISTS booking_items;
+DROP TABLE IF EXISTS bookings;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS showtimes;
+DROP TABLE IF EXISTS movies;
+DROP TABLE IF EXISTS seats;
+DROP TABLE IF EXISTS rooms;
+DROP TABLE IF EXISTS cinemas;
+
+-- Keep btree_gist because it may have existed before this migration.

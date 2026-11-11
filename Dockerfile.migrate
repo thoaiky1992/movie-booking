@@ -1,0 +1,7 @@
+FROM golang:1.27 AS goose
+RUN CGO_ENABLED=0 go install github.com/pressly/goose/v3/cmd/goose@latest
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=goose /go/bin/goose /goose
+COPY migrations /migrations
+ENTRYPOINT ["/goose", "-dir", "/migrations"]
