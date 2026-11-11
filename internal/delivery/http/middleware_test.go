@@ -2,7 +2,9 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	nethttp "net/http"
 	"net/http/httptest"
@@ -10,6 +12,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+type userRepositoryStub struct {
+	exists          bool
+	err             error
+	requestedUserID int64
+}
+
+func (s *userRepositoryStub) Exists(_ context.Context, userID int64) (bool, error) {
+	s.requestedUserID = userID
+	return s.exists, s.err
+}
 
 func TestRecoveryUsesErrorEnvelopeAndTraceID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -74,5 +87,76 @@ func TestTraceIDMiddlewareReplacesInvalidIncomingValue(t *testing.T) {
 	traceID := recorder.Header().Get(TraceIDHeader)
 	if len(traceID) != 32 || traceID == "invalid trace id" {
 		t.Fatalf("generated trace ID = %q, want 32-character ID", traceID)
+	}
+}
+
+func TestAuthMiddlewareValidatesAndAddsUserToContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &userRepositoryStub{exists: true}
+	r := gin.New()
+	r.Use(TraceIDMiddleware(), AuthMiddleware(repository))
+	r.GET("/protected", func(c *gin.Context) {
+		userID, ok := UserIDFromContext(c.Request.Context())
+		if !ok {
+			c.Status(nethttp.StatusInternalServerError)
+			return
+		}
+		RespondSuccess(c, nethttp.StatusOK, gin.H{"user_id": userID})
+	})
+
+	req := httptest.NewRequest(nethttp.MethodGet, "/protected", nil)
+	req.Header.Set(UserIDHeader, "42")
+	recorder := httptest.NewRecorder()
+	r.ServeHTTP(recorder, req)
+
+	if recorder.Code != nethttp.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, nethttp.StatusOK, recorder.Body.String())
+	}
+	if repository.requestedUserID != 42 {
+		t.Fatalf("repository user ID = %d, want 42", repository.requestedUserID)
+	}
+}
+
+func TestAuthMiddlewareRejectsMissingOrUnknownUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name       string
+		header     string
+		repository *userRepositoryStub
+	}{
+		{name: "missing header", repository: &userRepositoryStub{exists: true}},
+		{name: "invalid header", header: "not-a-number", repository: &userRepositoryStub{exists: true}},
+		{name: "unknown user", header: "99", repository: &userRepositoryStub{exists: false}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := gin.New()
+			r.Use(TraceIDMiddleware(), AuthMiddleware(test.repository))
+			r.GET("/protected", func(c *gin.Context) { c.Status(nethttp.StatusNoContent) })
+			req := httptest.NewRequest(nethttp.MethodGet, "/protected", nil)
+			if test.header != "" {
+				req.Header.Set(UserIDHeader, test.header)
+			}
+			recorder := httptest.NewRecorder()
+			r.ServeHTTP(recorder, req)
+			if recorder.Code != nethttp.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, nethttp.StatusUnauthorized, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthMiddlewareReturnsInternalErrorWhenLookupFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(TraceIDMiddleware(), AuthMiddleware(&userRepositoryStub{err: errors.New("database down")}))
+	r.GET("/protected", func(c *gin.Context) { c.Status(nethttp.StatusNoContent) })
+	req := httptest.NewRequest(nethttp.MethodGet, "/protected", nil)
+	req.Header.Set(UserIDHeader, "42")
+	recorder := httptest.NewRecorder()
+	r.ServeHTTP(recorder, req)
+	if recorder.Code != nethttp.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, nethttp.StatusInternalServerError, recorder.Body.String())
 	}
 }

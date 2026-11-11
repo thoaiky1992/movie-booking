@@ -12,17 +12,26 @@ import (
 
 	"movie-booking/internal/database"
 	httpdelivery "movie-booking/internal/delivery/http"
+	"movie-booking/internal/domain"
 )
 
 type Server struct {
 	port int
 
 	db             database.Service
+	userRepository domain.UserRepository
 	catalogHandler *httpdelivery.CatalogHandler
+	bookingHandler *httpdelivery.BookingHandler
 	logger         *slog.Logger
 }
 
-func NewServer(db database.Service, catalogHandler *httpdelivery.CatalogHandler, logger *slog.Logger) *http.Server {
+func NewServer(
+	db database.Service,
+	userRepository domain.UserRepository,
+	catalogHandler *httpdelivery.CatalogHandler,
+	bookingHandler *httpdelivery.BookingHandler,
+	logger *slog.Logger,
+) *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	if port == 0 {
 		port = 8080
@@ -31,7 +40,9 @@ func NewServer(db database.Service, catalogHandler *httpdelivery.CatalogHandler,
 	app := &Server{
 		port:           port,
 		db:             db,
+		userRepository: userRepository,
 		catalogHandler: catalogHandler,
+		bookingHandler: bookingHandler,
 		logger:         logger,
 	}
 

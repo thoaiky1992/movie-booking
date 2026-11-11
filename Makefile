@@ -19,6 +19,10 @@ build:
 # Run the application
 run:
 	@go run cmd/api/main.go
+
+# Run the seat-hold expiry worker as a separate process.
+run-worker:
+	@go run cmd/worker/main.go
 # Create DB container
 docker-run:
 	@if docker compose up --build 2>/dev/null; then \
@@ -85,4 +89,4 @@ watch:
             fi; \
         fi
 
-.PHONY: all build run test clean watch docker-run docker-down itest migration-create migration-up migration-down migration-status
+.PHONY: all build run run-worker test clean watch docker-run docker-down itest migration-create migration-up migration-down migration-status

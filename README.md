@@ -1,6 +1,8 @@
-# Project movie-booking
+# Movie Booking System
 
-One Paragraph of project description goes here
+Backend đặt vé dùng Go/Gin, PostgreSQL, Redis và Goose. PostgreSQL là nguồn sự
+thật cho booking/seat ownership; Redis giảm tranh chấp ở đường ghi nóng và cung
+cấp TTL nhanh cho seat hold.
 
 ## Getting Started
 
@@ -80,11 +82,92 @@ GET /api/v1/cinemas/:cinemaID/movies
 GET /api/v1/movies/:movieID
 GET /api/v1/cinemas/:cinemaID/movies/:movieID/showtimes
 GET /api/v1/showtimes/:showtimeID/seats
+POST /api/v1/showtimes/:showtimeID/holds
 ```
 
 The seat-map endpoint returns seats grouped by row. Seat status is one of
 `AVAILABLE`, `HELD`, or `BOOKED`; an expired hold is treated as available.
 The movie-detail endpoint includes the `external_ratings` array.
+
+Create an all-or-nothing 15-minute seat hold:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/showtimes/12/holds \
+  -H 'Content-Type: application/json' \
+  -H 'X-User-ID: 1' \
+  -d '{"seat_ids":[1,2]}'
+```
+
+`X-User-ID` is resolved by HTTP middleware, verified against PostgreSQL, and
+stored in the request context before the booking handler runs. In production,
+this header must be overwritten by a trusted authentication gateway; do not
+trust a value supplied directly by a public client.
+
+```json
+{
+  "success": true,
+  "data": {
+    "booking_id": 42,
+    "showtime_id": 1,
+    "seat_ids": [1, 2],
+    "hold_token": "0fcb4f93-b17f-4668-a310-b28e66d9e6d2",
+    "status": "PENDING",
+    "total_amount": "200000.00",
+    "expires_at": "2026-11-11T10:15:00Z"
+  }
+}
+```
+
+## Seat-hold concurrency design
+
+The Redis Lua script checks every seat key first and writes every key with
+`PSETEX` only if the full set is free. Keys use a showtime hash tag, so the
+script also works on Redis Cluster. This is a fast contention gate, not the
+source of truth.
+
+The PostgreSQL transaction creates a pending booking and inserts every
+`seat_claims` row. Its primary key `(showtime_id, seat_id)` serializes races.
+`ON CONFLICT ... DO UPDATE ... WHERE expires_at <= NOW()` permits only expired
+holds to be reclaimed. If fewer than all requested seats are returned, the
+transaction rolls back, including the booking and booking items. Consequently,
+a Redis restart or temporary outage cannot cause a double sale.
+
+The expiry worker selects pending bookings in configurable batches with
+`FOR UPDATE OF b SKIP LOCKED`, deletes their `HELD` claims, and marks them
+`EXPIRED` in one transaction. Multiple API replicas can run this worker safely.
+Redis cleanup is compare-and-delete by the opaque hold token; TTL remains the
+self-healing fallback.
+
+Relevant configuration:
+
+```text
+REDIS_URL=redis://localhost:6379/0
+SEAT_HOLD_TTL_SECONDS=900
+HOLD_EXPIRY_INTERVAL_SECONDS=5
+HOLD_EXPIRY_BATCH_SIZE=100
+```
+
+The expiry worker is a separate process from the HTTP API. Run it locally with:
+
+```bash
+make run-worker
+```
+
+Docker Compose starts both `api` and `worker` after migrations and Redis are
+ready:
+
+```bash
+docker compose up --build
+```
+
+The database query uses `SKIP LOCKED`, so the worker implementation supports
+multiple replicas. Remove the fixed Compose `container_name` before using
+`docker compose up --scale worker=N`.
+
+Each worker polling cycle generates a `trace_id` and propagates it through the
+PostgreSQL expiry call, Redis cleanup, and all structured logs. Idle cycle logs
+are emitted at `DEBUG`; cycles that release seats are emitted at `INFO` with
+`released_seats`, `database_calls`, and `latency_ms`.
 
 All successful API responses use the same envelope:
 

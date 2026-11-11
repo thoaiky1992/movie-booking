@@ -51,7 +51,10 @@ CREATE TABLE showtimes (
     room_id BIGINT NOT NULL REFERENCES rooms(id),
     starts_at TIMESTAMPTZ NOT NULL,
     ends_at TIMESTAMPTZ NOT NULL,
+    -- Pricing is owned by the showtime and snapshotted into booking_items.
+    base_price NUMERIC(12,2) NOT NULL DEFAULT 100000.00,
     CONSTRAINT ck_showtimes_time CHECK (ends_at > starts_at),
+    CONSTRAINT ck_showtimes_base_price CHECK (base_price >= 0),
     CONSTRAINT uq_showtimes_id_room UNIQUE (id, room_id),
     CONSTRAINT ex_showtimes_room_overlap EXCLUDE USING GIST (
         room_id WITH =,
@@ -77,6 +80,8 @@ CREATE TABLE bookings (
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     total_amount NUMERIC(12,2) NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
+    -- Also stored in Redis for compare-and-delete of temporary holds.
+    hold_token VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     confirmed_at TIMESTAMPTZ,
     CONSTRAINT ck_bookings_status CHECK (
@@ -89,6 +94,9 @@ CREATE INDEX idx_bookings_user_created ON bookings(user_id, created_at DESC);
 CREATE INDEX idx_bookings_pending_expiry ON bookings(expires_at)
     WHERE status = 'PENDING';
 CREATE INDEX idx_bookings_showtime ON bookings(showtime_id);
+CREATE UNIQUE INDEX uq_bookings_hold_token
+    ON bookings(hold_token)
+    WHERE hold_token IS NOT NULL;
 
 -- 8. Itemized booking history and price snapshot
 CREATE TABLE booking_items (

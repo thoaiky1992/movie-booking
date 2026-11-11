@@ -6,15 +6,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	redisclient "github.com/redis/go-redis/v9"
 
 	"movie-booking/internal/database"
 	httpdelivery "movie-booking/internal/delivery/http"
 	"movie-booking/internal/repository/postgres"
+	redisrepository "movie-booking/internal/repository/redis"
 	"movie-booking/internal/server"
 	"movie-booking/internal/usecase"
 )
@@ -59,7 +62,27 @@ func main() {
 	catalogRepository := postgres.NewCatalogRepository(db.DB())
 	catalogService := usecase.NewCatalogService(catalogRepository)
 	catalogHandler := httpdelivery.NewCatalogHandler(catalogService)
-	apiServer := server.NewServer(db, catalogHandler, logger)
+
+	redisClient, seatLocker := newRedis(logger)
+	if redisClient != nil {
+		defer func() {
+			if err := redisClient.Close(); err != nil {
+				logger.Error("redis_close_failed", "error", err)
+			}
+		}()
+	}
+
+	bookingRepository := postgres.NewBookingRepository(db.DB())
+	holdTTL := durationFromSeconds("SEAT_HOLD_TTL_SECONDS", 15*60)
+	bookingService := usecase.NewBookingService(
+		bookingRepository,
+		seatLocker,
+		logger,
+		holdTTL,
+	)
+	bookingHandler := httpdelivery.NewBookingHandler(bookingService)
+	userRepository := postgres.NewUserRepository(db.DB())
+	apiServer := server.NewServer(db, userRepository, catalogHandler, bookingHandler, logger)
 
 	// Create a done channel to signal when the shutdown is complete
 	done := make(chan bool, 1)
@@ -77,6 +100,32 @@ func main() {
 	// Wait for the graceful shutdown to complete
 	<-done
 	slog.Info("graceful_shutdown_complete")
+}
+
+func newRedis(logger *slog.Logger) (*redisclient.Client, *redisrepository.SeatLocker) {
+	redisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0"
+	}
+	client, err := redisrepository.NewClient(redisURL)
+	if err != nil {
+		logger.Warn("redis_disabled", "error", err)
+		return nil, nil
+	}
+	return client, redisrepository.NewSeatLocker(client)
+}
+
+func durationFromSeconds(name string, fallbackSeconds int) time.Duration {
+	seconds := intFromEnv(name, fallbackSeconds)
+	return time.Duration(seconds) * time.Second
+}
+
+func intFromEnv(name string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func newLogger() *slog.Logger {

@@ -2,27 +2,28 @@ package http
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	nethttp "net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"movie-booking/internal/domain"
+	"movie-booking/internal/observability"
 )
 
 const (
-	TraceIDHeader = "X-Trace-ID"
-	traceIDKey    = "trace_id"
+	TraceIDHeader     = "X-Trace-ID"
+	UserIDHeader      = "X-User-ID"
+	traceIDKey        = "trace_id"
+	userLookupTimeout = 2 * time.Second
 )
 
-type traceIDContextKey struct{}
-
-var fallbackTraceSequence atomic.Uint64
+type userIDContextKey struct{}
 
 // TraceIDMiddleware accepts a caller-provided trace ID or creates one, then
 // makes it available to handlers, logs, downstream calls, and the response.
@@ -44,22 +45,65 @@ func EnsureTraceID(c *gin.Context) string {
 
 	traceID := strings.TrimSpace(c.GetHeader(TraceIDHeader))
 	if !validTraceID(traceID) {
-		traceID = newTraceID()
+		traceID = observability.NewTraceID()
 	}
 
 	c.Set(traceIDKey, traceID)
 	c.Header(TraceIDHeader, traceID)
-	c.Request = c.Request.WithContext(context.WithValue(
+	c.Request = c.Request.WithContext(observability.ContextWithTraceID(
 		c.Request.Context(),
-		traceIDContextKey{},
 		traceID,
 	))
 	return traceID
 }
 
 func TraceIDFromContext(ctx context.Context) string {
-	traceID, _ := ctx.Value(traceIDContextKey{}).(string)
-	return traceID
+	return observability.TraceIDFromContext(ctx)
+}
+
+// AuthMiddleware resolves the caller identity at the HTTP boundary. In a
+// production deployment, X-User-ID must be set by a trusted auth gateway, not
+// accepted directly from an untrusted public client.
+func AuthMiddleware(repository domain.UserRepository) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, err := strconv.ParseInt(strings.TrimSpace(c.GetHeader(UserIDHeader)), 10, 64)
+		if err != nil || userID <= 0 {
+			RespondError(
+				c,
+				nethttp.StatusUnauthorized,
+				"UNAUTHORIZED",
+				"a valid X-User-ID header is required",
+			)
+			c.Abort()
+			return
+		}
+
+		lookupCtx, cancel := context.WithTimeout(c.Request.Context(), userLookupTimeout)
+		exists, err := repository.Exists(lookupCtx, userID)
+		cancel()
+		if err != nil {
+			respondInternalError(c, err)
+			c.Abort()
+			return
+		}
+		if !exists {
+			RespondError(c, nethttp.StatusUnauthorized, "UNAUTHORIZED", "user identity is invalid")
+			c.Abort()
+			return
+		}
+
+		c.Request = c.Request.WithContext(context.WithValue(
+			c.Request.Context(),
+			userIDContextKey{},
+			userID,
+		))
+		c.Next()
+	}
+}
+
+func UserIDFromContext(ctx context.Context) (int64, bool) {
+	userID, ok := ctx.Value(userIDContextKey{}).(int64)
+	return userID, ok && userID > 0
 }
 
 func RequestLogger(logger *slog.Logger) gin.HandlerFunc {
@@ -83,6 +127,9 @@ func RequestLogger(logger *slog.Logger) gin.HandlerFunc {
 			slog.Int64("latency_ms", time.Since(startedAt).Milliseconds()),
 			slog.Int("response_size", c.Writer.Size()),
 			slog.String("client_ip", c.ClientIP()),
+		}
+		if userID, ok := UserIDFromContext(c.Request.Context()); ok {
+			attributes = append(attributes, slog.Int64("user_id", userID))
 		}
 		if len(c.Errors) > 0 {
 			attributes = append(attributes, slog.String("error", c.Errors.String()))
@@ -156,17 +203,4 @@ func validTraceID(traceID string) bool {
 		}
 	}
 	return true
-}
-
-func newTraceID() string {
-	random := make([]byte, 16)
-	if _, err := rand.Read(random); err == nil {
-		return hex.EncodeToString(random)
-	}
-
-	return fmt.Sprintf(
-		"%016x%016x",
-		uint64(time.Now().UnixNano()),
-		fallbackTraceSequence.Add(1),
-	)
 }

@@ -19,9 +19,15 @@ func (s *Server) RegisterRoutes() http.Handler {
 	)
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173"}, // Add your frontend URL
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowHeaders:     []string{"Accept", "Authorization", "Content-Type", httpdelivery.TraceIDHeader},
+		AllowOrigins: []string{"http://localhost:5173"}, // Add your frontend URL
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowHeaders: []string{
+			"Accept",
+			"Authorization",
+			"Content-Type",
+			httpdelivery.TraceIDHeader,
+			httpdelivery.UserIDHeader,
+		},
 		ExposeHeaders:    []string{httpdelivery.TraceIDHeader},
 		AllowCredentials: true, // Enable cookies/auth
 	}))
@@ -46,6 +52,11 @@ func (s *Server) RegisterRoutes() http.Handler {
 			s.catalogHandler.ListShowtimesByCinemaAndMovie,
 		)
 		api.GET("/showtimes/:showtimeID/seats", s.catalogHandler.GetSeatMap)
+		api.POST(
+			"/showtimes/:showtimeID/holds",
+			httpdelivery.AuthMiddleware(s.userRepository),
+			s.bookingHandler.HoldSeats,
+		)
 	}
 
 	return r

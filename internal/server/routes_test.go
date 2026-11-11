@@ -23,6 +23,38 @@ type catalogUseCaseStub struct {
 	requestedShowtimeID    int64
 }
 
+type bookingUseCaseStub struct {
+	userID     int64
+	showtimeID int64
+	seatIDs    []int64
+}
+
+type userRepositoryStub struct {
+	exists bool
+	err    error
+}
+
+func (s *userRepositoryStub) Exists(context.Context, int64) (bool, error) {
+	return s.exists, s.err
+}
+
+func (s *bookingUseCaseStub) HoldSeats(
+	_ context.Context,
+	userID int64,
+	showtimeID int64,
+	seatIDs []int64,
+) (*domain.SeatHold, error) {
+	s.userID = userID
+	s.showtimeID = showtimeID
+	s.seatIDs = append([]int64(nil), seatIDs...)
+	return &domain.SeatHold{
+		BookingID:  userID,
+		ShowtimeID: showtimeID,
+		SeatIDs:    seatIDs,
+		Status:     "PENDING",
+	}, nil
+}
+
 func (s *catalogUseCaseStub) ListCinemas(context.Context) ([]domain.Cinema, error) {
 	return []domain.Cinema{}, nil
 }
@@ -140,8 +172,11 @@ func TestRegisterRoutesExposesNewCatalogAPIs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	useCase := &catalogUseCaseStub{}
+	bookingUseCase := &bookingUseCaseStub{}
 	s := &Server{
+		userRepository: &userRepositoryStub{exists: true},
 		catalogHandler: httpdelivery.NewCatalogHandler(useCase),
+		bookingHandler: httpdelivery.NewBookingHandler(bookingUseCase),
 		logger:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	r := s.RegisterRoutes()
@@ -168,6 +203,44 @@ func TestRegisterRoutesExposesNewCatalogAPIs(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, test.wantStatus, recorder.Body.String())
 			}
 		})
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/showtimes/30/holds",
+		bytes.NewBufferString(`{"seat_ids":[101,102]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(httpdelivery.UserIDHeader, "10")
+	r.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("hold status = %d, want %d; body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	if bookingUseCase.showtimeID != 30 || bookingUseCase.userID != 10 {
+		t.Fatalf(
+			"unexpected hold arguments: user_id=%d showtime_id=%d seat_ids=%v",
+			bookingUseCase.userID,
+			bookingUseCase.showtimeID,
+			bookingUseCase.seatIDs,
+		)
+	}
+
+	unauthorizedRecorder := httptest.NewRecorder()
+	unauthorizedRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/showtimes/30/holds",
+		bytes.NewBufferString(`{"seat_ids":[101,102]}`),
+	)
+	unauthorizedRequest.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(unauthorizedRecorder, unauthorizedRequest)
+	if unauthorizedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"hold without X-User-ID status = %d, want %d; body = %s",
+			unauthorizedRecorder.Code,
+			http.StatusUnauthorized,
+			unauthorizedRecorder.Body.String(),
+		)
 	}
 
 	if useCase.requestedCinemaID != 10 {
