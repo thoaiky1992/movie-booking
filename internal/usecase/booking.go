@@ -23,9 +23,14 @@ type SeatLocker interface {
 	Release(ctx context.Context, showtimeID int64, seatIDs []int64, owner string) error
 }
 
+type BookingConfirmationEnqueuer interface {
+	EnqueueBookingConfirmation(context.Context, *domain.ConfirmedBooking) error
+}
+
 type BookingService struct {
 	repository domain.BookingRepository
 	locker     SeatLocker
+	enqueuer   BookingConfirmationEnqueuer
 	logger     *slog.Logger
 	holdTTL    time.Duration
 	timeout    time.Duration
@@ -34,16 +39,57 @@ type BookingService struct {
 func NewBookingService(
 	repository domain.BookingRepository,
 	locker SeatLocker,
+	enqueuer BookingConfirmationEnqueuer,
 	logger *slog.Logger,
 	holdTTL time.Duration,
 ) *BookingService {
 	return &BookingService{
 		repository: repository,
 		locker:     locker,
+		enqueuer:   enqueuer,
 		logger:     logger,
 		holdTTL:    holdTTL,
 		timeout:    5 * time.Second,
 	}
+}
+
+func (s *BookingService) ConfirmBooking(
+	ctx context.Context,
+	userID, bookingID int64,
+) (*domain.ConfirmedBooking, error) {
+	if userID <= 0 || bookingID <= 0 {
+		return nil, domain.ErrInvalidBookingID
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	confirmed, err := s.repository.ConfirmBooking(ctx, userID, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("confirm booking: %w", err)
+	}
+
+	if s.enqueuer != nil {
+		if err := s.enqueuer.EnqueueBookingConfirmation(ctx, confirmed); err != nil {
+			return nil, fmt.Errorf("queue booking confirmation email: %w", err)
+		}
+	}
+
+	if s.locker != nil && confirmed.HoldToken != "" && len(confirmed.SeatIDs) > 0 {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), time.Second)
+		releaseErr := s.locker.Release(
+			releaseCtx,
+			confirmed.ShowtimeID,
+			confirmed.SeatIDs,
+			confirmed.HoldToken,
+		)
+		releaseCancel()
+		if releaseErr != nil {
+			// PostgreSQL already owns the confirmed seats; Redis TTL bounds the
+			// lifetime of this now-redundant hold.
+			s.logger.Warn("redis_confirmed_hold_release_failed", "error", releaseErr)
+		}
+	}
+	return confirmed, nil
 }
 
 func (s *BookingService) HoldSeats(

@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hibiken/asynq"
 	redisclient "github.com/redis/go-redis/v9"
 
 	"movie-booking/internal/database"
 	httpdelivery "movie-booking/internal/delivery/http"
+	"movie-booking/internal/notification"
 	"movie-booking/internal/repository/postgres"
 	redisrepository "movie-booking/internal/repository/redis"
 	"movie-booking/internal/server"
@@ -73,10 +75,22 @@ func main() {
 	}
 
 	bookingRepository := postgres.NewBookingRepository(db.DB())
+	asynqRedisOption, err := asynq.ParseRedisURI(configuredRedisURL())
+	if err != nil {
+		logger.Error("asynq_redis_configuration_invalid", "error", err)
+		return
+	}
+	emailEnqueuer := notification.NewAsynqEnqueuer(asynqRedisOption)
+	defer func() {
+		if err := emailEnqueuer.Close(); err != nil {
+			logger.Error("asynq_client_close_failed", "error", err)
+		}
+	}()
 	holdTTL := durationFromSeconds("SEAT_HOLD_TTL_SECONDS", 15*60)
 	bookingService := usecase.NewBookingService(
 		bookingRepository,
 		seatLocker,
+		emailEnqueuer,
 		logger,
 		holdTTL,
 	)
@@ -91,7 +105,7 @@ func main() {
 	go gracefulShutdown(apiServer, done)
 
 	slog.Info("http_server_started", "address", apiServer.Addr)
-	err := apiServer.ListenAndServe()
+	err = apiServer.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
 		slog.Error("http_server_failed", "error", err)
 		return
@@ -103,16 +117,20 @@ func main() {
 }
 
 func newRedis(logger *slog.Logger) (*redisclient.Client, *redisrepository.SeatLocker) {
-	redisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
-	if redisURL == "" {
-		redisURL = "redis://localhost:6379/0"
-	}
-	client, err := redisrepository.NewClient(redisURL)
+	client, err := redisrepository.NewClient(configuredRedisURL())
 	if err != nil {
 		logger.Warn("redis_disabled", "error", err)
 		return nil, nil
 	}
 	return client, redisrepository.NewSeatLocker(client)
+}
+
+func configuredRedisURL() string {
+	redisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
+	if redisURL == "" {
+		return "redis://localhost:6379/0"
+	}
+	return redisURL
 }
 
 func durationFromSeconds(name string, fallbackSeconds int) time.Duration {

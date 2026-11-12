@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -35,6 +36,13 @@ type service struct {
 	db *sql.DB
 }
 
+type poolConfig struct {
+	maxOpenConnections int
+	maxIdleConnections int
+	maxLifetime        time.Duration
+	maxIdleTime        time.Duration
+}
+
 var (
 	database   = os.Getenv("DB_DATABASE")
 	password   = os.Getenv("DB_PASSWORD")
@@ -55,6 +63,11 @@ func New() Service {
 	if err != nil {
 		log.Fatal(err)
 	}
+	pool := databasePoolConfigFromEnv()
+	db.SetMaxOpenConns(pool.maxOpenConnections)
+	db.SetMaxIdleConns(pool.maxIdleConnections)
+	db.SetConnMaxLifetime(pool.maxLifetime)
+	db.SetConnMaxIdleTime(pool.maxIdleTime)
 	dbInstance = &service{
 		db: db,
 	}
@@ -85,6 +98,7 @@ func (s *service) Health() map[string]string {
 	// Get database stats (like open connections, in use, idle, etc.)
 	dbStats := s.db.Stats()
 	stats["open_connections"] = strconv.Itoa(dbStats.OpenConnections)
+	stats["max_open_connections"] = strconv.Itoa(dbStats.MaxOpenConnections)
 	stats["in_use"] = strconv.Itoa(dbStats.InUse)
 	stats["idle"] = strconv.Itoa(dbStats.Idle)
 	stats["wait_count"] = strconv.FormatInt(dbStats.WaitCount, 10)
@@ -110,6 +124,33 @@ func (s *service) Health() map[string]string {
 	}
 
 	return stats
+}
+
+func databasePoolConfigFromEnv() poolConfig {
+	maxOpenConnections := positiveIntFromEnv("DB_MAX_OPEN_CONNS", 20)
+	maxIdleConnections := positiveIntFromEnv("DB_MAX_IDLE_CONNS", 10)
+	if maxIdleConnections > maxOpenConnections {
+		maxIdleConnections = maxOpenConnections
+	}
+
+	return poolConfig{
+		maxOpenConnections: maxOpenConnections,
+		maxIdleConnections: maxIdleConnections,
+		maxLifetime: time.Duration(
+			positiveIntFromEnv("DB_CONN_MAX_LIFETIME_MINUTES", 30),
+		) * time.Minute,
+		maxIdleTime: time.Duration(
+			positiveIntFromEnv("DB_CONN_MAX_IDLE_TIME_MINUTES", 5),
+		) * time.Minute,
+	}
+}
+
+func positiveIntFromEnv(name string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 // Close closes the database connection.

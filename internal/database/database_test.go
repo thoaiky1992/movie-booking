@@ -98,3 +98,55 @@ func TestClose(t *testing.T) {
 		t.Fatalf("expected Close() to return nil")
 	}
 }
+
+func TestDatabasePoolConfigFromEnv(t *testing.T) {
+	t.Setenv("DB_MAX_OPEN_CONNS", "24")
+	t.Setenv("DB_MAX_IDLE_CONNS", "12")
+	t.Setenv("DB_CONN_MAX_LIFETIME_MINUTES", "40")
+	t.Setenv("DB_CONN_MAX_IDLE_TIME_MINUTES", "8")
+
+	config := databasePoolConfigFromEnv()
+	if config.maxOpenConnections != 24 || config.maxIdleConnections != 12 {
+		t.Fatalf(
+			"connection limits = open %d idle %d, want open 24 idle 12",
+			config.maxOpenConnections,
+			config.maxIdleConnections,
+		)
+	}
+	if config.maxLifetime != 40*time.Minute || config.maxIdleTime != 8*time.Minute {
+		t.Fatalf("connection durations = lifetime %s idle %s", config.maxLifetime, config.maxIdleTime)
+	}
+}
+
+func TestDatabasePoolConfigCapsIdleConnections(t *testing.T) {
+	t.Setenv("DB_MAX_OPEN_CONNS", "10")
+	t.Setenv("DB_MAX_IDLE_CONNS", "25")
+
+	config := databasePoolConfigFromEnv()
+	if config.maxIdleConnections != config.maxOpenConnections {
+		t.Fatalf(
+			"idle connections = %d, want capped at %d",
+			config.maxIdleConnections,
+			config.maxOpenConnections,
+		)
+	}
+}
+
+func TestDatabasePoolConfigUsesDefaultsForInvalidValues(t *testing.T) {
+	t.Setenv("DB_MAX_OPEN_CONNS", "invalid")
+	t.Setenv("DB_MAX_IDLE_CONNS", "0")
+	t.Setenv("DB_CONN_MAX_LIFETIME_MINUTES", "-1")
+	t.Setenv("DB_CONN_MAX_IDLE_TIME_MINUTES", "")
+
+	config := databasePoolConfigFromEnv()
+	if config.maxOpenConnections != 20 || config.maxIdleConnections != 10 {
+		t.Fatalf(
+			"default connection limits = open %d idle %d",
+			config.maxOpenConnections,
+			config.maxIdleConnections,
+		)
+	}
+	if config.maxLifetime != 30*time.Minute || config.maxIdleTime != 5*time.Minute {
+		t.Fatalf("default durations = lifetime %s idle %s", config.maxLifetime, config.maxIdleTime)
+	}
+}

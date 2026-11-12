@@ -13,18 +13,31 @@ import (
 )
 
 type bookingRepositoryStub struct {
-	hold            *domain.SeatHold
-	err             error
-	userID          int64
-	showtimeID      int64
-	seatIDs         []int64
-	holdToken       string
-	ttl             time.Duration
-	called          bool
-	cancelled       *domain.CancelledBooking
-	cancelErr       error
-	cancelUserID    int64
-	cancelBookingID int64
+	hold             *domain.SeatHold
+	err              error
+	userID           int64
+	showtimeID       int64
+	seatIDs          []int64
+	holdToken        string
+	ttl              time.Duration
+	called           bool
+	cancelled        *domain.CancelledBooking
+	cancelErr        error
+	cancelUserID     int64
+	cancelBookingID  int64
+	confirmed        *domain.ConfirmedBooking
+	confirmErr       error
+	confirmUserID    int64
+	confirmBookingID int64
+}
+
+func (s *bookingRepositoryStub) ConfirmBooking(
+	_ context.Context,
+	userID, bookingID int64,
+) (*domain.ConfirmedBooking, error) {
+	s.confirmUserID = userID
+	s.confirmBookingID = bookingID
+	return s.confirmed, s.confirmErr
 }
 
 func (s *bookingRepositoryStub) CancelBooking(
@@ -71,6 +84,19 @@ type seatLockerStub struct {
 	releasedOwner string
 }
 
+type confirmationEnqueuerStub struct {
+	booking *domain.ConfirmedBooking
+	err     error
+}
+
+func (s *confirmationEnqueuerStub) EnqueueBookingConfirmation(
+	_ context.Context,
+	booking *domain.ConfirmedBooking,
+) error {
+	s.booking = booking
+	return s.err
+}
+
 func (s *seatLockerStub) Acquire(
 	_ context.Context,
 	_ int64,
@@ -102,7 +128,7 @@ func testLogger() *slog.Logger {
 func TestHoldSeatsSortsAndPersistsAllSeats(t *testing.T) {
 	repository := &bookingRepositoryStub{hold: &domain.SeatHold{BookingID: 7}}
 	locker := &seatLockerStub{acquired: true}
-	service := NewBookingService(repository, locker, testLogger(), 15*time.Minute)
+	service := NewBookingService(repository, locker, nil, testLogger(), 15*time.Minute)
 
 	inputSeats := []int64{9, 4, 7}
 	hold, err := service.HoldSeats(context.Background(), 2, 3, inputSeats)
@@ -130,7 +156,7 @@ func TestHoldSeatsSortsAndPersistsAllSeats(t *testing.T) {
 func TestHoldSeatsStopsOnRedisConflict(t *testing.T) {
 	repository := &bookingRepositoryStub{}
 	locker := &seatLockerStub{acquired: false}
-	service := NewBookingService(repository, locker, testLogger(), time.Minute)
+	service := NewBookingService(repository, locker, nil, testLogger(), time.Minute)
 
 	_, err := service.HoldSeats(context.Background(), 2, 3, []int64{4})
 	if !errors.Is(err, domain.ErrSeatsUnavailable) {
@@ -144,7 +170,7 @@ func TestHoldSeatsStopsOnRedisConflict(t *testing.T) {
 func TestHoldSeatsReleasesRedisWhenDatabaseRejects(t *testing.T) {
 	repository := &bookingRepositoryStub{err: domain.ErrSeatsUnavailable}
 	locker := &seatLockerStub{acquired: true}
-	service := NewBookingService(repository, locker, testLogger(), time.Minute)
+	service := NewBookingService(repository, locker, nil, testLogger(), time.Minute)
 
 	_, err := service.HoldSeats(context.Background(), 2, 3, []int64{4, 5})
 	if !errors.Is(err, domain.ErrSeatsUnavailable) {
@@ -158,7 +184,7 @@ func TestHoldSeatsReleasesRedisWhenDatabaseRejects(t *testing.T) {
 func TestHoldSeatsFallsBackToDatabaseWhenRedisIsDown(t *testing.T) {
 	repository := &bookingRepositoryStub{hold: &domain.SeatHold{BookingID: 8}}
 	locker := &seatLockerStub{acquireErr: errors.New("redis unavailable")}
-	service := NewBookingService(repository, locker, testLogger(), time.Minute)
+	service := NewBookingService(repository, locker, nil, testLogger(), time.Minute)
 
 	_, err := service.HoldSeats(context.Background(), 2, 3, []int64{4})
 	if err != nil {
@@ -170,7 +196,7 @@ func TestHoldSeatsFallsBackToDatabaseWhenRedisIsDown(t *testing.T) {
 }
 
 func TestHoldSeatsRejectsDuplicateSeats(t *testing.T) {
-	service := NewBookingService(&bookingRepositoryStub{}, nil, testLogger(), time.Minute)
+	service := NewBookingService(&bookingRepositoryStub{}, nil, nil, testLogger(), time.Minute)
 	_, err := service.HoldSeats(context.Background(), 2, 3, []int64{4, 4})
 	if !errors.Is(err, domain.ErrInvalidSeatHold) {
 		t.Fatalf("error = %v, want ErrInvalidSeatHold", err)
@@ -183,7 +209,7 @@ func TestCancelBookingReleasesRedisHold(t *testing.T) {
 		Status: "CANCELLED", HoldToken: "hold-token",
 	}}
 	locker := &seatLockerStub{}
-	service := NewBookingService(repository, locker, testLogger(), time.Minute)
+	service := NewBookingService(repository, locker, nil, testLogger(), time.Minute)
 
 	cancelled, err := service.CancelBooking(context.Background(), 2, 7)
 	if err != nil {
@@ -199,9 +225,46 @@ func TestCancelBookingReleasesRedisHold(t *testing.T) {
 }
 
 func TestCancelBookingRejectsInvalidID(t *testing.T) {
-	service := NewBookingService(&bookingRepositoryStub{}, nil, testLogger(), time.Minute)
+	service := NewBookingService(&bookingRepositoryStub{}, nil, nil, testLogger(), time.Minute)
 	_, err := service.CancelBooking(context.Background(), 2, 0)
 	if !errors.Is(err, domain.ErrInvalidBookingID) {
 		t.Fatalf("error = %v, want ErrInvalidBookingID", err)
+	}
+}
+
+func TestConfirmBookingQueuesEmailAndReleasesHold(t *testing.T) {
+	confirmed := &domain.ConfirmedBooking{
+		BookingID: 7, ShowtimeID: 3, SeatIDs: []int64{4, 5},
+		Status: "CONFIRMED", RecipientEmail: "user@example.com", HoldToken: "hold-token",
+	}
+	repository := &bookingRepositoryStub{confirmed: confirmed}
+	locker := &seatLockerStub{}
+	enqueuer := &confirmationEnqueuerStub{}
+	service := NewBookingService(repository, locker, enqueuer, testLogger(), time.Minute)
+
+	result, err := service.ConfirmBooking(context.Background(), 2, 7)
+	if err != nil {
+		t.Fatalf("ConfirmBooking() error = %v", err)
+	}
+	if result != confirmed || enqueuer.booking != confirmed {
+		t.Fatalf("confirmation was not queued: result=%+v queued=%+v", result, enqueuer.booking)
+	}
+	if repository.confirmUserID != 2 || repository.confirmBookingID != 7 {
+		t.Fatalf("repository arguments = user %d booking %d", repository.confirmUserID, repository.confirmBookingID)
+	}
+	if !locker.releaseCalled || locker.releasedOwner != "hold-token" ||
+		!reflect.DeepEqual(locker.releasedSeats, []int64{4, 5}) {
+		t.Fatalf("Redis release = seats %v owner %q", locker.releasedSeats, locker.releasedOwner)
+	}
+}
+
+func TestConfirmBookingReturnsQueueError(t *testing.T) {
+	repository := &bookingRepositoryStub{confirmed: &domain.ConfirmedBooking{BookingID: 7}}
+	enqueuer := &confirmationEnqueuerStub{err: errors.New("redis unavailable")}
+	service := NewBookingService(repository, nil, enqueuer, testLogger(), time.Minute)
+
+	_, err := service.ConfirmBooking(context.Background(), 2, 7)
+	if err == nil || !errors.Is(err, enqueuer.err) {
+		t.Fatalf("error = %v, want queue error", err)
 	}
 }

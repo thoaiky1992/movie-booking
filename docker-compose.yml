@@ -89,11 +89,11 @@ services:
     networks:
       - app-network
 
-  worker:
+  hold-expiry-worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
-    container_name: worker_release_seat
+      dockerfile: Dockerfile.hold-expiry-worker
+    container_name: hold_expiry_worker
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -104,6 +104,30 @@ services:
       - .env
     environment:
       DB_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 64M
+    networks:
+      - app-network
+
+  email-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.email-worker
+    container_name: email_worker
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
       REDIS_URL: redis://redis:6379/0
     deploy:
       resources:

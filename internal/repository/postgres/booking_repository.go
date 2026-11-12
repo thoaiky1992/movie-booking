@@ -47,12 +47,15 @@ func (r *BookingRepository) HoldSeats(
 		FROM showtimes
 		WHERE id = $1`, showtimeID).Scan(&roomID, &basePrice, &started)
 	if errors.Is(err, sql.ErrNoRows) {
+		// The showtime does not exist, so we cannot hold seats for it.
 		return nil, domain.ErrShowtimeNotFound
 	}
 	if err != nil {
+		// The showtime exists, but we failed to load it for some reason.
 		return nil, fmt.Errorf("load showtime for seat hold: %w", err)
 	}
 	if started {
+		// The showtime has already started, so we cannot hold seats for it.
 		return nil, domain.ErrShowtimeStarted
 	}
 
@@ -65,6 +68,7 @@ func (r *BookingRepository) HoldSeats(
 		return nil, fmt.Errorf("validate seats: %w", err)
 	}
 	if validSeatCount != len(seatIDs) {
+		// The requested seats do not all exist in the showtime's room, so we cannot hold them.
 		return nil, domain.ErrInvalidSeatHold
 	}
 
@@ -92,6 +96,7 @@ func (r *BookingRepository) HoldSeats(
 		holdToken,
 	).Scan(&hold.BookingID, &hold.TotalAmount, &hold.ExpiresAt)
 	if err != nil {
+		// The booking could not be created, so we cannot hold the seats.
 		return nil, fmt.Errorf("create pending booking: %w", err)
 	}
 
@@ -120,6 +125,7 @@ func (r *BookingRepository) HoldSeats(
 		seatIDs,
 	)
 	if err != nil {
+		// The seat claims could not be created, so we cannot hold the seats.
 		return nil, fmt.Errorf("claim seats: %w", err)
 	}
 	defer rows.Close() // ensure rows are closed even if we return early
@@ -129,9 +135,11 @@ func (r *BookingRepository) HoldSeats(
 		claimed++
 	}
 	if err := rows.Err(); err != nil {
+		// The seat claims could not be read, so we cannot hold the seats.
 		return nil, fmt.Errorf("read claimed seats: %w", err)
 	}
 	if claimed != len(seatIDs) {
+		// The seat claims could not be created for all requested seats, so we cannot hold them.
 		return nil, domain.ErrSeatsUnavailable
 	}
 
@@ -144,6 +152,7 @@ func (r *BookingRepository) HoldSeats(
 		basePrice,
 		seatIDs,
 	); err != nil {
+		// The booking items could not be created, so we cannot hold the seats.
 		return nil, fmt.Errorf("create booking items: %w", err)
 	}
 
@@ -151,6 +160,162 @@ func (r *BookingRepository) HoldSeats(
 		return nil, fmt.Errorf("commit seat hold: %w", err)
 	}
 	return hold, nil
+}
+
+func (r *BookingRepository) ConfirmBooking(
+	ctx context.Context,
+	userID, bookingID int64,
+) (_ *domain.ConfirmedBooking, returnErr error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, fmt.Errorf("begin booking confirmation transaction: %w", err)
+	}
+	defer func() {
+		if returnErr != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	confirmed := &domain.ConfirmedBooking{
+		BookingID: bookingID,
+		Status:    "CONFIRMED",
+	}
+	var (
+		status      string
+		unexpired   bool
+		confirmedAt sql.NullTime
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT
+			b.showtime_id,
+			b.status,
+			b.total_amount::text,
+			b.expires_at > NOW(),
+			b.confirmed_at,
+			COALESCE(b.hold_token, ''),
+			u.email
+		FROM bookings AS b
+		JOIN users AS u ON u.id = b.user_id
+		WHERE b.id = $1 AND b.user_id = $2
+		FOR UPDATE OF b`, bookingID, userID).Scan(
+		&confirmed.ShowtimeID,
+		&status,
+		&confirmed.TotalAmount,
+		&unexpired,
+		&confirmedAt,
+		&confirmed.HoldToken,
+		&confirmed.RecipientEmail,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		// The booking does not exist or does not belong to the user, so we cannot confirm it.
+		return nil, domain.ErrBookingNotFound
+	}
+	if err != nil {
+		// The booking exists and belongs to the user, but we failed to load it for some reason.
+		return nil, fmt.Errorf("load booking for confirmation: %w", err)
+	}
+	if status == "CONFIRMED" && confirmedAt.Valid {
+		confirmed.ConfirmedAt = confirmedAt.Time
+		seatRows, err := tx.QueryContext(ctx, `
+			SELECT seat_id
+			FROM booking_items
+			WHERE booking_id = $1
+			ORDER BY seat_id`, bookingID)
+		if err != nil {
+			// The booking is already confirmed, but we failed to load the confirmed seats for some reason.
+			return nil, fmt.Errorf("load confirmed booking seats: %w", err)
+		}
+		defer seatRows.Close()
+		for seatRows.Next() {
+			var seatID int64
+			if err := seatRows.Scan(&seatID); err != nil {
+				// The booking is already confirmed, but we failed to read the confirmed seats for some reason.
+				return nil, fmt.Errorf("scan existing confirmed booking seat: %w", err)
+			}
+			confirmed.SeatIDs = append(confirmed.SeatIDs, seatID)
+		}
+		if err := seatRows.Err(); err != nil {
+			// The booking is already confirmed, but we failed to read the confirmed seats for some reason.
+			return nil, fmt.Errorf("read existing confirmed booking seats: %w", err)
+		}
+		if len(confirmed.SeatIDs) == 0 {
+			// The booking is already confirmed, but it has no associated seats, which is an invalid state.
+			return nil, domain.ErrBookingNotConfirmable
+		}
+		if err := tx.Commit(); err != nil {
+			// The booking is already confirmed, but we failed to commit the transaction for some reason.
+			return nil, fmt.Errorf("commit existing booking confirmation read: %w", err)
+		}
+		return confirmed, nil
+	}
+	if status != "PENDING" || !unexpired {
+		// The booking is not in a state that allows confirmation.
+		return nil, domain.ErrBookingNotConfirmable
+	}
+
+	var expectedSeats int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM booking_items
+		WHERE booking_id = $1`, bookingID).Scan(&expectedSeats); err != nil {
+		return nil, fmt.Errorf("count booking seats for confirmation: %w", err)
+	}
+	if expectedSeats == 0 {
+		// The booking has no associated seats, which is an invalid state.
+		return nil, domain.ErrBookingNotConfirmable
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE seat_claims
+		SET status = 'BOOKED', expires_at = NULL
+		WHERE booking_id = $1 AND status = 'HELD'
+		RETURNING seat_id`, bookingID)
+	if err != nil {
+		// The seat claims could not be updated to booked, so we cannot confirm the booking.
+		return nil, fmt.Errorf("confirm booking seats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var seatID int64
+		if err := rows.Scan(&seatID); err != nil {
+			return nil, fmt.Errorf("scan confirmed booking seat: %w", err)
+		}
+		confirmed.SeatIDs = append(confirmed.SeatIDs, seatID)
+	}
+	if err := rows.Err(); err != nil {
+		// The seat claims could not be read after attempting to update them to booked,
+		// so we cannot confirm the booking.
+		return nil, fmt.Errorf("read confirmed booking seats: %w", err)
+	}
+	if len(confirmed.SeatIDs) != expectedSeats {
+		// The number of seat claims updated to booked does not match the expected number of seats for the booking,
+		// which indicates a conflict or invalid state.
+		return nil, domain.ErrBookingNotConfirmable
+	}
+	sort.Slice(confirmed.SeatIDs, func(i, j int) bool {
+		return confirmed.SeatIDs[i] < confirmed.SeatIDs[j]
+	})
+
+	err = tx.QueryRowContext(ctx, `
+		UPDATE bookings
+		SET status = 'CONFIRMED', confirmed_at = NOW()
+		WHERE id = $1 AND status = 'PENDING' AND expires_at > NOW()
+		RETURNING confirmed_at`, bookingID).Scan(&confirmed.ConfirmedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		// The booking was not updated to confirmed, which indicates that it was either not pending or had expired,
+		// so we cannot confirm it.
+		return nil, domain.ErrBookingNotConfirmable
+	}
+	if err != nil {
+		// The booking could not be updated to confirmed for some reason, so we cannot confirm it.
+		return nil, fmt.Errorf("confirm booking: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit booking confirmation: %w", err)
+	}
+	return confirmed, nil
 }
 
 func (r *BookingRepository) CancelBooking(

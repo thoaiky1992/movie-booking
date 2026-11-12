@@ -37,6 +37,14 @@ func (s *bookingRepositoryStub) CancelBooking(
 	return nil, nil
 }
 
+func (s *bookingRepositoryStub) ConfirmBooking(
+	context.Context,
+	int64,
+	int64,
+) (*domain.ConfirmedBooking, error) {
+	return nil, nil
+}
+
 func (s *bookingRepositoryStub) ExpirePendingHolds(
 	ctx context.Context,
 	_ int,

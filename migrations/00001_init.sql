@@ -79,11 +79,11 @@ CREATE TABLE bookings (
     showtime_id BIGINT NOT NULL REFERENCES showtimes(id),
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     total_amount NUMERIC(12,2) NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
     -- Also stored in Redis for compare-and-delete of temporary holds.
     hold_token VARCHAR(64),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
     confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_bookings_status CHECK (
         status IN ('PENDING', 'CONFIRMED', 'CANCELLED', 'EXPIRED')
     ),
@@ -139,27 +139,7 @@ CREATE INDEX idx_seat_claims_booking ON seat_claims(booking_id);
 CREATE INDEX idx_seat_claims_expiration ON seat_claims(expires_at)
     WHERE status = 'HELD';
 
--- 10. Payment attempts / transactions
-CREATE TABLE payments (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    booking_id BIGINT NOT NULL REFERENCES bookings(id),
-    provider VARCHAR(50) NOT NULL,
-    provider_transaction_id VARCHAR(255),
-    amount NUMERIC(12,2) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    paid_at TIMESTAMPTZ,
-    CONSTRAINT ck_payments_amount CHECK (amount >= 0),
-    CONSTRAINT ck_payments_status CHECK (
-        status IN ('PENDING', 'SUCCESS', 'FAILED', 'REFUNDED')
-    )
-);
-CREATE INDEX idx_payments_booking ON payments(booking_id);
-CREATE UNIQUE INDEX uq_payments_provider_transaction
-    ON payments(provider, provider_transaction_id)
-    WHERE provider_transaction_id IS NOT NULL;
-
--- 11. Movie detailed metadata (1:1 with movies)
+-- 10. Movie detailed metadata (1:1 with movies)
 CREATE TABLE movie_details (
     movie_id BIGINT PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE,
     synopsis TEXT,
@@ -174,7 +154,7 @@ CREATE TABLE movie_details (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 12. External partner rating snapshots (1:N with movies)
+-- 11. External partner rating snapshots (1:N with movies)
 CREATE TABLE movie_external_ratings (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     movie_id BIGINT NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
@@ -205,7 +185,6 @@ COMMENT ON COLUMN movie_external_ratings.last_synced_at IS 'Time the rating was 
 -- +goose Down
 DROP TABLE IF EXISTS movie_external_ratings;
 DROP TABLE IF EXISTS movie_details;
-DROP TABLE IF EXISTS payments;
 DROP TABLE IF EXISTS seat_claims;
 DROP TABLE IF EXISTS booking_items;
 DROP TABLE IF EXISTS bookings;

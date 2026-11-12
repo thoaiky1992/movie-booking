@@ -58,6 +58,11 @@ func (s *Server) RegisterRoutes() http.Handler {
 			s.bookingHandler.HoldSeats,
 		)
 		api.POST(
+			"/bookings/:bookingID/confirm",
+			httpdelivery.AuthMiddleware(s.userRepository),
+			s.bookingHandler.ConfirmBooking,
+		)
+		api.POST(
 			"/bookings/:bookingID/cancel",
 			httpdelivery.AuthMiddleware(s.userRepository),
 			s.bookingHandler.CancelBooking,

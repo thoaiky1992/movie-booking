@@ -83,6 +83,7 @@ GET /api/v1/movies/:movieID
 GET /api/v1/cinemas/:cinemaID/movies/:movieID/showtimes
 GET /api/v1/showtimes/:showtimeID/seats
 POST /api/v1/showtimes/:showtimeID/holds
+POST /api/v1/bookings/:bookingID/confirm
 POST /api/v1/bookings/:bookingID/cancel
 ```
 
@@ -105,6 +106,21 @@ Cancel a pending booking owned by the authenticated user and release its seats:
 curl -X POST http://localhost:8080/api/v1/bookings/42/cancel \
   -H 'X-User-ID: 1'
 ```
+
+Confirm a pending booking and enqueue its confirmation email:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/bookings/42/confirm \
+  -H 'X-User-ID: 1'
+```
+
+Confirmation atomically changes the booking from `PENDING` to `CONFIRMED` and
+its seat claims from `HELD` to `BOOKED`. The endpoint is idempotent. It publishes
+one `email:booking_confirmation` task per booking to the Asynq `email` queue in
+Redis. The background worker consumes the task and the current `MockMailer`
+waits for a random 1–2 seconds, then prints a
+`mock_booking_confirmation_email_sent` success log instead of contacting an
+external mail provider.
 
 Only `PENDING` bookings can be cancelled. A booking belonging to another user is
 reported as not found; an already confirmed, cancelled, or expired booking
@@ -154,19 +170,26 @@ Relevant configuration:
 
 ```text
 REDIS_URL=redis://localhost:6379/0
+DB_MAX_OPEN_CONNS=20
+DB_MAX_IDLE_CONNS=10
+DB_CONN_MAX_LIFETIME_MINUTES=30
+DB_CONN_MAX_IDLE_TIME_MINUTES=5
 SEAT_HOLD_TTL_SECONDS=900
 HOLD_EXPIRY_INTERVAL_SECONDS=5
 HOLD_EXPIRY_BATCH_SIZE=100
+ASYNQ_CONCURRENCY=5
 ```
 
-The expiry worker is a separate process from the HTTP API. Run it locally with:
+The seat-hold expiry worker and Asynq email worker are separate processes. Run
+them locally in two terminals with:
 
 ```bash
-make run-worker
+make run-hold-expiry-worker
+make run-email-worker
 ```
 
-Docker Compose starts both `api` and `worker` after migrations and Redis are
-ready:
+Docker Compose starts `api`, the seat-expiry `worker`, and `email-worker` after
+their dependencies are ready:
 
 ```bash
 docker compose up --build
@@ -218,6 +241,15 @@ Run the test suite:
 ```bash
 make test
 ```
+
+Run the hot-seat contention load test after choosing an available seat:
+
+```bash
+make loadtest-hot-seat SHOWTIME_ID=1 SEAT_ID=193
+```
+
+The scenario and configurable performance thresholds are documented in
+[`loadtests/k6/README.md`](loadtests/k6/README.md).
 
 Clean up binary from the last build:
 ```bash

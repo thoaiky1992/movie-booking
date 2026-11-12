@@ -39,6 +39,15 @@ func (s *bookingUseCaseStub) CancelBooking(
 	return &domain.CancelledBooking{BookingID: bookingID, Status: "CANCELLED"}, nil
 }
 
+func (s *bookingUseCaseStub) ConfirmBooking(
+	_ context.Context,
+	userID, bookingID int64,
+) (*domain.ConfirmedBooking, error) {
+	s.userID = userID
+	s.bookingID = bookingID
+	return &domain.ConfirmedBooking{BookingID: bookingID, Status: "CONFIRMED"}, nil
+}
+
 type userRepositoryStub struct {
 	exists bool
 	err    error
@@ -245,6 +254,17 @@ func TestRegisterRoutesExposesNewCatalogAPIs(t *testing.T) {
 	}
 	if bookingUseCase.bookingID != 42 || bookingUseCase.userID != 10 {
 		t.Fatalf("unexpected cancel arguments: user_id=%d booking_id=%d", bookingUseCase.userID, bookingUseCase.bookingID)
+	}
+
+	confirmRecorder := httptest.NewRecorder()
+	confirmRequest := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/43/confirm", nil)
+	confirmRequest.Header.Set(httpdelivery.UserIDHeader, "10")
+	r.ServeHTTP(confirmRecorder, confirmRequest)
+	if confirmRecorder.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want %d; body = %s", confirmRecorder.Code, http.StatusOK, confirmRecorder.Body.String())
+	}
+	if bookingUseCase.bookingID != 43 || bookingUseCase.userID != 10 {
+		t.Fatalf("unexpected confirm arguments: user_id=%d booking_id=%d", bookingUseCase.userID, bookingUseCase.bookingID)
 	}
 
 	unauthorizedRecorder := httptest.NewRecorder()
