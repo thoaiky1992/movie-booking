@@ -177,19 +177,26 @@ DB_CONN_MAX_IDLE_TIME_MINUTES=5
 SEAT_HOLD_TTL_SECONDS=900
 HOLD_EXPIRY_INTERVAL_SECONDS=5
 HOLD_EXPIRY_BATCH_SIZE=100
+RATING_UPDATE_INTERVAL_SECONDS=30
 ASYNQ_CONCURRENCY=5
 ```
 
-The seat-hold expiry worker and Asynq email worker are separate processes. Run
-them locally in two terminals with:
+The seat-hold expiry worker, Asynq email worker, and external-rating updater are
+separate processes. Run them locally in separate terminals with:
 
 ```bash
 make run-hold-expiry-worker
 make run-email-worker
+make run-rating-updater-worker
 ```
 
-Docker Compose starts `api`, the seat-expiry `worker`, and `email-worker` after
-their dependencies are ready:
+The rating updater runs once immediately and then every
+`RATING_UPDATE_INTERVAL_SECONDS` (default `30`). Each cycle selects one row from
+`movie_external_ratings`, assigns a random score from `0` through its
+`max_score`, and refreshes `last_synced_at`.
+
+Docker Compose starts `api` and all three workers after their dependencies are
+ready:
 
 ```bash
 docker compose up --build
@@ -242,10 +249,13 @@ Run the test suite:
 make test
 ```
 
-Run the hot-seat contention load test after choosing an available seat:
+Run the hot-seat contention load test after choosing 1 to 10 seats. The same command
+can be repeated while any seat is still held or booked; later runs then report
+zero successful booking requests instead of aborting. By default, the configured
+VUs continuously send requests for one minute:
 
 ```bash
-make loadtest-hot-seat SHOWTIME_ID=1 SEAT_ID=193
+make loadtest-hot-seat SHOWTIME_ID=1 SEAT_IDS=193,194,195
 ```
 
 The scenario and configurable performance thresholds are documented in

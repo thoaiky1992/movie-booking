@@ -30,6 +30,10 @@ run-worker: run-hold-expiry-worker
 # Run the Asynq booking-confirmation email worker as a separate process.
 run-email-worker:
 	@go run ./cmd/workers email
+
+# Run the random external-rating updater as a separate process.
+run-rating-updater-worker:
+	@go run ./cmd/workers rating-updater
 # Create DB container
 docker-run:
 	@if docker compose up --build 2>/dev/null; then \
@@ -53,12 +57,12 @@ test:
 	@echo "Testing..."
 	@go test ./... -v
 
-# Contention test: requires SHOWTIME_ID, SEAT_ID, and k6 on PATH.
+# Contention test: requires SHOWTIME_ID, SEAT_IDS, and k6 on PATH.
 loadtest-hot-seat:
 	@command -v k6 >/dev/null || (echo "k6 is required: https://grafana.com/docs/k6/latest/set-up/install-k6/" && exit 1)
 	@test -n "$(SHOWTIME_ID)" || (echo "SHOWTIME_ID is required" && exit 1)
-	@test -n "$(SEAT_ID)" || (echo "SEAT_ID is required" && exit 1)
-	@SHOWTIME_ID="$(SHOWTIME_ID)" SEAT_ID="$(SEAT_ID)" k6 run loadtests/k6/hot_seat_contention.js
+	@test -n "$(SEAT_IDS)" || (echo "SEAT_IDS is required" && exit 1)
+	@SHOWTIME_ID="$(SHOWTIME_ID)" SEAT_IDS="$(SEAT_IDS)" k6 run loadtests/k6/hot_seat_contention.js
 # Integrations Tests for the application
 itest:
 	@echo "Running integration tests..."
@@ -103,4 +107,4 @@ watch:
             fi; \
         fi
 
-.PHONY: all build run run-worker run-hold-expiry-worker run-email-worker test loadtest-hot-seat clean watch docker-run docker-down itest migration-create migration-up migration-down migration-status
+.PHONY: all build run run-worker run-hold-expiry-worker run-email-worker run-rating-updater-worker test loadtest-hot-seat clean watch docker-run docker-down itest migration-create migration-up migration-down migration-status

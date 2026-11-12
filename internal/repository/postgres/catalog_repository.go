@@ -50,16 +50,16 @@ func (r *CatalogRepository) ListCinemas(ctx context.Context) ([]domain.Cinema, e
 
 func (r *CatalogRepository) ListMoviesByCinema(ctx context.Context, cinemaID int64) ([]domain.Movie, error) {
 	const query = `
-		SELECT DISTINCT
-			m.id,
-			m.title,
-			m.duration_minutes,
-			m.created_at
+		SELECT m.id, m.title, m.duration_minutes, m.created_at
 		FROM movies m
-		JOIN showtimes st ON st.movie_id = m.id
-		JOIN rooms r ON r.id = st.room_id
-		WHERE r.cinema_id = $1
-		ORDER BY m.title, m.id`
+		WHERE EXISTS (
+			SELECT 1
+			FROM showtimes st
+			JOIN rooms r ON r.id = st.room_id
+			WHERE st.movie_id = m.id
+			AND r.cinema_id = $1
+		)
+		ORDER BY m.id, m.title;`
 
 	rows, err := r.db.QueryContext(ctx, query, cinemaID)
 	if err != nil {

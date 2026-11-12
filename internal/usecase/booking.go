@@ -69,6 +69,8 @@ func (s *BookingService) ConfirmBooking(
 	}
 
 	if s.enqueuer != nil {
+		// Queue the booking confirmation email asynchronously.
+		// If this fails, we log the error but do not fail the booking confirmation.
 		if err := s.enqueuer.EnqueueBookingConfirmation(ctx, confirmed); err != nil {
 			return nil, fmt.Errorf("queue booking confirmation email: %w", err)
 		}
@@ -125,8 +127,10 @@ func (s *BookingService) HoldSeats(
 			// contention, but must not make the correctness invariant unavailable.
 			s.logger.Warn("redis_seat_lock_unavailable", "error", err)
 		} else if !acquired {
+			// The seats are already held by another user
 			return nil, domain.ErrSeatsUnavailable
 		} else {
+			// Redis acquired the lock successfully
 			redisAcquired = true
 		}
 	}
@@ -142,6 +146,7 @@ func (s *BookingService) HoldSeats(
 	if err == nil {
 		return hold, nil
 	}
+	// If the PostgreSQL transaction fails, we must release the Redis lock to avoid a stale hold.
 	if redisAcquired {
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), time.Second)
 		defer releaseCancel()

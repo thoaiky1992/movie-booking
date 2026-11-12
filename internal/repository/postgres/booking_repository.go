@@ -128,7 +128,7 @@ func (r *BookingRepository) HoldSeats(
 		// The seat claims could not be created, so we cannot hold the seats.
 		return nil, fmt.Errorf("claim seats: %w", err)
 	}
-	defer rows.Close() // ensure rows are closed even if we return early
+	defer rows.Close()
 
 	claimed := 0
 	for rows.Next() {
@@ -357,12 +357,11 @@ func (r *BookingRepository) CancelBooking(
 	if err != nil {
 		return nil, fmt.Errorf("release cancelled booking seats: %w", err)
 	}
-	defer rows.Close() // ensure rows are closed even if we return early
+	defer rows.Close()
 
 	for rows.Next() {
 		var seatID int64
 		if err := rows.Scan(&seatID); err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("scan cancelled booking seat: %w", err)
 		}
 		cancelled.SeatIDs = append(cancelled.SeatIDs, seatID)
@@ -420,7 +419,7 @@ func (r *BookingRepository) ExpirePendingHolds(
 	if err != nil {
 		return nil, fmt.Errorf("select expired holds: %w", err)
 	}
-	defer rows.Close() // defer rows.Close() // ensure rows are closed even if we return early
+	defer rows.Close()
 
 	bookingIDs := make([]int64, 0, batchSize)
 	for rows.Next() {
@@ -452,7 +451,7 @@ func (r *BookingRepository) ExpirePendingHolds(
 	if err != nil {
 		return nil, fmt.Errorf("release expired seat claims: %w", err)
 	}
-	defer releasedRows.Close() // ensure releasedRows are closed even if we return early
+	defer releasedRows.Close()
 
 	released := make([]domain.ReleasedSeat, 0)
 	for releasedRows.Next() {

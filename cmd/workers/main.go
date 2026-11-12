@@ -32,6 +32,8 @@ func main() {
 		err = runEmailWorker(ctx, logger)
 	case "hold-expiry":
 		err = runHoldExpiryWorker(ctx, logger)
+	case "rating-updater":
+		err = runRatingUpdaterWorker(ctx, logger)
 	default:
 		err = fmt.Errorf("unknown worker type %q; %s", os.Args[1], workerUsage())
 	}
@@ -42,7 +44,7 @@ func main() {
 }
 
 func workerUsage() string {
-	return "workers <email|hold-expiry>"
+	return "workers <email|hold-expiry|rating-updater>"
 }
 
 func configuredRedisURL() string {

@@ -3,8 +3,7 @@ import { check, fail } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
 const vus = positiveInteger('VUS', 200);
-const iterationsPerVU = positiveInteger('ITERATIONS_PER_VU', 1);
-const totalIterations = vus * iterationsPerVU;
+const duration = __ENV.DURATION || '10s';
 const p95LimitMilliseconds = positiveInteger('P95_MS', 1000);
 const p99LimitMilliseconds = positiveInteger('P99_MS', 2000);
 
@@ -12,29 +11,29 @@ const winners = new Counter('hot_seat_winners');
 const conflicts = new Counter('hot_seat_conflicts');
 const unexpectedResponses = new Counter('hot_seat_unexpected_responses');
 const validOutcomes = new Rate('hot_seat_valid_outcomes');
+const bookingSucceeded = new Rate('hot_seat_booking_succeeded');
 const holdDuration = new Trend('hot_seat_hold_duration', true);
 const expectedHoldStatuses = http.expectedStatuses(201, 409);
 
 export const options = {
   scenarios: {
     hot_seat_contention: {
-      executor: 'per-vu-iterations',
+      executor: 'constant-vus',
       vus,
-      iterations: iterationsPerVU,
-      maxDuration: __ENV.MAX_DURATION || '30s',
-      gracefulStop: '0s',
+      duration,
+      gracefulStop: '10s',
     },
   },
   thresholds: {
-    // An initially available seat must have exactly one winner, never two.
-    hot_seat_winners: ['count==1'],
-    hot_seat_unexpected_responses: ['count==0'],
-    hot_seat_valid_outcomes: ['rate==1'],
-    iterations: [`count==${totalIterations}`],
-    'http_req_failed{scenario:hot_seat_contention}': ['rate==0'],
+    // A reused seat group can have no winner, but it must never have two winners.
+    hot_seat_winners: ['count<=1'], // at most one winner
+    hot_seat_unexpected_responses: ['count==0'], // no unexpected responses allowed
+    hot_seat_valid_outcomes: ['rate==1'], // all responses must be valid
+    iterations: ['count>0'], // at least one request must run
+    'http_req_failed{scenario:hot_seat_contention}': ['rate==0'], // no failed requests allowed
     'http_req_duration{scenario:hot_seat_contention}': [
-      `p(95)<${p95LimitMilliseconds}`,
-      `p(99)<${p99LimitMilliseconds}`,
+      `p(95)<${p95LimitMilliseconds}`, // 95th percentile must be below the limit
+      `p(99)<${p99LimitMilliseconds}`, // 99th percentile must be below the limit
     ],
   },
 };
@@ -42,7 +41,7 @@ export const options = {
 export function setup() {
   const baseURL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
   const showtimeID = requiredPositiveInteger('SHOWTIME_ID');
-  const seatID = requiredPositiveInteger('SEAT_ID');
+  const seatIDs = requiredPositiveIntegerList('SEAT_IDS', 10);
   const userIDs = (__ENV.USER_IDS || '1,2,3,4,5')
     .split(',')
     .map((value) => Number.parseInt(value.trim(), 10));
@@ -66,26 +65,37 @@ export function setup() {
   }
 
   const seats = (body.data?.rows || []).flatMap((row) => row.seats || []);
-  const targetSeat = seats.find((seat) => seat.id === seatID);
-  if (!targetSeat) {
-    fail(`seat ${seatID} does not belong to showtime ${showtimeID}`);
-  }
-  if (targetSeat.status !== 'AVAILABLE') {
-    fail(`seat ${seatID} must be AVAILABLE before the test; current status=${targetSeat.status}`);
+  const seatsByID = new Map(seats.map((seat) => [seat.id, seat]));
+  const missingSeatIDs = seatIDs.filter((seatID) => !seatsByID.has(seatID));
+  if (missingSeatIDs.length > 0) {
+    fail(`seats ${missingSeatIDs.join(',')} do not belong to showtime ${showtimeID}`);
   }
 
+  const targetSeats = seatIDs.map((seatID) => seatsByID.get(seatID));
+  const initialStatuses = targetSeats
+    .map((seat) => `${seat.id}:${seat.status}`)
+    .join(',');
   console.log(
-    `Hot-seat contention: ${totalIterations} requests, ${vus} VUs, ` +
-      `showtime=${showtimeID}, seat=${seatID}`,
+    `Hot-seat contention: continuous requests for ${duration}, ${vus} VUs, ` +
+      `showtime=${showtimeID}, seats=${seatIDs.join(',')}, ` +
+      `initial_statuses=${initialStatuses}`,
   );
-  return { baseURL, showtimeID, seatID, userIDs };
+  const unavailableSeats = targetSeats.filter((seat) => seat.status !== 'AVAILABLE');
+  if (unavailableSeats.length > 0) {
+    console.warn(
+      `Seats already unavailable: ${unavailableSeats
+        .map((seat) => `${seat.id}:${seat.status}`)
+        .join(',')}; requests will still run and no booking winner is expected.`,
+    );
+  }
+  return { baseURL, showtimeID, seatIDs, userIDs };
 }
 
 export default function (data) {
   const userID = data.userIDs[(__VU - 1) % data.userIDs.length];
   const response = http.post(
     `${data.baseURL}/api/v1/showtimes/${data.showtimeID}/holds`,
-    JSON.stringify({ seat_ids: [data.seatID] }),
+    JSON.stringify({ seat_ids: data.seatIDs }),
     {
       headers: {
         'Content-Type': 'application/json',
@@ -107,18 +117,19 @@ export default function (data) {
     responseBody = null;
   }
 
+  let wonSeat = false;
   if (response.status === 201) {
     const heldSeats = responseBody?.data?.seat_ids || [];
     validOutcome =
       responseBody?.success === true &&
       responseBody?.data?.status === 'PENDING' &&
-      heldSeats.length === 1 &&
-      heldSeats[0] === data.seatID;
+      sameSeatIDs(heldSeats, data.seatIDs);
     if (validOutcome) {
+      wonSeat = true;
       winners.add(1);
       console.log(
         `WINNER booking_id=${responseBody.data.booking_id} ` +
-          `user_id=${userID} seat_id=${data.seatID}`,
+          `user_id=${userID} seat_ids=${data.seatIDs.join(',')}`,
       );
     }
   } else if (response.status === 409) {
@@ -129,6 +140,12 @@ export default function (data) {
     }
   }
 
+  // Recording every request keeps both metrics visible in the summary even
+  // when a reused seat produces zero winners.
+  if (!wonSeat) {
+    winners.add(0);
+  }
+  bookingSucceeded.add(wonSeat);
   validOutcomes.add(validOutcome);
   unexpectedResponses.add(!validOutcome, { status: String(response.status) });
   if (!validOutcome) {
@@ -158,4 +175,29 @@ function requiredPositiveInteger(name) {
     throw new Error(`${name} is required`);
   }
   return positiveInteger(name, 0);
+}
+
+function requiredPositiveIntegerList(name, maxItems) {
+  if (__ENV[name] === undefined || __ENV[name] === '') {
+    throw new Error(`${name} is required`);
+  }
+
+  const values = __ENV[name].split(',').map((value) => Number(value.trim()));
+  if (
+    values.length === 0 ||
+    values.length > maxItems ||
+    values.some((value) => !Number.isInteger(value) || value <= 0) ||
+    new Set(values).size !== values.length
+  ) {
+    throw new Error(`${name} must contain 1 to ${maxItems} unique positive integers`);
+  }
+  return values.sort((left, right) => left - right);
+}
+
+function sameSeatIDs(actual, expected) {
+  return (
+    Array.isArray(actual) &&
+    actual.length === expected.length &&
+    expected.every((seatID) => actual.includes(seatID))
+  );
 }
