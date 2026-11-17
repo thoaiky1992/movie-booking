@@ -14,11 +14,11 @@ build:
 	@echo "Building..."
 	
 	
-	@go build -o main cmd/api/main.go
+	@go build -o main ./cmd/api
 
 # Run the application
 run:
-	@go run cmd/api/main.go
+	@go run ./cmd/api
 
 # Run the seat-hold expiry worker as a separate process.
 run-hold-expiry-worker:

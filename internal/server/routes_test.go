@@ -116,40 +116,6 @@ func (s *catalogUseCaseStub) GetSeatMap(
 	return &domain.SeatMap{ShowtimeID: showtimeID}, nil
 }
 
-func TestHelloWorldHandlerUsesSuccessEnvelope(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	s := &Server{}
-	r := gin.New()
-	r.GET("/", s.HelloWorldHandler)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(httpdelivery.TraceIDHeader, "trace-success-123")
-	recorder := httptest.NewRecorder()
-	r.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
-	}
-	if got := recorder.Header().Get(httpdelivery.TraceIDHeader); got != "trace-success-123" {
-		t.Fatalf("trace header = %q, want %q", got, "trace-success-123")
-	}
-
-	var response struct {
-		Success bool `json:"success"`
-		Data    struct {
-			Message string `json:"message"`
-		} `json:"data"`
-		TraceID string `json:"trace_id"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !response.Success || response.Data.Message != "Hello World" || response.TraceID != "trace-success-123" {
-		t.Fatalf("unexpected response: %+v", response)
-	}
-}
-
 func TestRegisterRoutesUsesErrorEnvelopeAndJSONLog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

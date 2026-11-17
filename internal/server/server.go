@@ -4,56 +4,44 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
-	"time"
 
-	_ "github.com/joho/godotenv/autoload"
-
-	"movie-booking/internal/database"
 	httpdelivery "movie-booking/internal/delivery/http"
 	"movie-booking/internal/domain"
 )
 
-type Server struct {
-	port int
+type Dependencies struct {
+	UserRepository domain.UserRepository
+	SystemHandler  *httpdelivery.SystemHandler
+	CatalogHandler *httpdelivery.CatalogHandler
+	BookingHandler *httpdelivery.BookingHandler
+	Logger         *slog.Logger
+}
 
-	db             database.Service
+type Server struct {
 	userRepository domain.UserRepository
+	systemHandler  *httpdelivery.SystemHandler
 	catalogHandler *httpdelivery.CatalogHandler
 	bookingHandler *httpdelivery.BookingHandler
 	logger         *slog.Logger
+	allowedOrigins []string
 }
 
-func NewServer(
-	db database.Service,
-	userRepository domain.UserRepository,
-	catalogHandler *httpdelivery.CatalogHandler,
-	bookingHandler *httpdelivery.BookingHandler,
-	logger *slog.Logger,
-) *http.Server {
-	port, _ := strconv.Atoi(os.Getenv("PORT"))
-	if port == 0 {
-		port = 8080
-	}
-
+func New(config Config, dependencies Dependencies) *http.Server {
+	config = config.withDefaults()
 	app := &Server{
-		port:           port,
-		db:             db,
-		userRepository: userRepository,
-		catalogHandler: catalogHandler,
-		bookingHandler: bookingHandler,
-		logger:         logger,
+		userRepository: dependencies.UserRepository,
+		systemHandler:  dependencies.SystemHandler,
+		catalogHandler: dependencies.CatalogHandler,
+		bookingHandler: dependencies.BookingHandler,
+		logger:         dependencies.Logger,
+		allowedOrigins: append([]string(nil), config.AllowedOrigins...),
 	}
 
-	// Declare Server config
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", app.port),
+	return &http.Server{
+		Addr:         fmt.Sprintf(":%d", config.Port),
 		Handler:      app.RegisterRoutes(),
-		IdleTimeout:  time.Minute,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  config.IdleTimeout,
+		ReadTimeout:  config.ReadTimeout,
+		WriteTimeout: config.WriteTimeout,
 	}
-
-	return server
 }
