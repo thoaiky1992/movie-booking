@@ -45,19 +45,23 @@ func newApplication(config apiConfig, logger *slog.Logger) (_ *application, err 
 			err = errors.Join(err, app.close())
 		}
 	}()
-
-	catalogRepository := postgres.NewCatalogRepository(app.database.DB())
-	catalogService := usecase.NewCatalogService(catalogRepository)
-	catalogHandler := httpdelivery.NewCatalogHandler(catalogService)
-
+	// Initialize the Redis client and seat locker
 	seatLocker := app.configureRedis(config.redisURL, logger)
 
-	bookingRepository := postgres.NewBookingRepository(app.database.DB())
+	// Initialize the Asynq client for email notifications
 	asynqRedisOption, err := asynq.ParseRedisURI(config.redisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse Asynq Redis configuration: %w", err)
 	}
 	app.emailEnqueuer = notification.NewAsynqEnqueuer(asynqRedisOption)
+
+	// Initialize the database connection
+	catalogRepository := postgres.NewCatalogRepository(app.database.DB())
+	catalogService := usecase.NewCatalogService(catalogRepository)
+	catalogHandler := httpdelivery.NewCatalogHandler(catalogService)
+
+	// Initialize the booking service and handler
+	bookingRepository := postgres.NewBookingRepository(app.database.DB())
 	bookingService := usecase.NewBookingService(
 		bookingRepository,
 		seatLocker,
@@ -66,6 +70,8 @@ func newApplication(config apiConfig, logger *slog.Logger) (_ *application, err 
 		config.seatHoldTTL,
 	)
 	bookingHandler := httpdelivery.NewBookingHandler(bookingService)
+
+	// Initialize the user repository and system handler
 	userRepository := postgres.NewUserRepository(app.database.DB())
 	systemHandler := httpdelivery.NewSystemHandler(app.database)
 
