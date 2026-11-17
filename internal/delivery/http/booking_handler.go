@@ -2,7 +2,6 @@ package http
 
 import (
 	"context"
-	"errors"
 	nethttp "net/http"
 
 	"github.com/gin-gonic/gin"
@@ -33,18 +32,12 @@ func (h *BookingHandler) ConfirmBooking(c *gin.Context) {
 	}
 
 	confirmed, err := h.useCase.ConfirmBooking(c.Request.Context(), userID, bookingID)
-	switch {
-	case err == nil:
-		RespondSuccess(c, nethttp.StatusOK, confirmed)
-	case errors.Is(err, domain.ErrInvalidBookingID):
-		RespondError(c, nethttp.StatusBadRequest, "INVALID_BOOKING_ID", err.Error())
-	case errors.Is(err, domain.ErrBookingNotFound):
-		RespondError(c, nethttp.StatusNotFound, "BOOKING_NOT_FOUND", err.Error())
-	case errors.Is(err, domain.ErrBookingNotConfirmable):
-		RespondError(c, nethttp.StatusConflict, "BOOKING_NOT_CONFIRMABLE", err.Error())
-	default:
-		respondInternalError(c, err)
+	if err != nil {
+		respondBookingError(c, err)
+		return
 	}
+
+	RespondSuccess(c, nethttp.StatusOK, confirmed)
 }
 
 func (h *BookingHandler) CancelBooking(c *gin.Context) {
@@ -59,18 +52,12 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	}
 
 	cancelled, err := h.useCase.CancelBooking(c.Request.Context(), userID, bookingID)
-	switch {
-	case err == nil:
-		RespondSuccess(c, nethttp.StatusOK, cancelled)
-	case errors.Is(err, domain.ErrInvalidBookingID):
-		RespondError(c, nethttp.StatusBadRequest, "INVALID_BOOKING_ID", err.Error())
-	case errors.Is(err, domain.ErrBookingNotFound):
-		RespondError(c, nethttp.StatusNotFound, "BOOKING_NOT_FOUND", err.Error())
-	case errors.Is(err, domain.ErrBookingNotCancellable):
-		RespondError(c, nethttp.StatusConflict, "BOOKING_NOT_CANCELLABLE", err.Error())
-	default:
-		respondInternalError(c, err)
+	if err != nil {
+		respondBookingError(c, err)
+		return
 	}
+
+	RespondSuccess(c, nethttp.StatusOK, cancelled)
 }
 
 type BookingHandler struct {
@@ -79,10 +66,6 @@ type BookingHandler struct {
 
 func NewBookingHandler(useCase BookingUseCase) *BookingHandler {
 	return &BookingHandler{useCase: useCase}
-}
-
-type holdSeatsRequest struct {
-	SeatIDs []int64 `json:"seat_ids" binding:"required,min=1,max=10,dive,gt=0"`
 }
 
 func (h *BookingHandler) HoldSeats(c *gin.Context) {
@@ -114,18 +97,10 @@ func (h *BookingHandler) HoldSeats(c *gin.Context) {
 		showtimeID,
 		request.SeatIDs,
 	)
-	switch {
-	case err == nil:
-		RespondSuccess(c, nethttp.StatusCreated, hold)
-	case errors.Is(err, domain.ErrInvalidSeatHold):
-		RespondError(c, nethttp.StatusBadRequest, "INVALID_HOLD_REQUEST", err.Error())
-	case errors.Is(err, domain.ErrShowtimeNotFound):
-		RespondError(c, nethttp.StatusNotFound, "SHOWTIME_NOT_FOUND", err.Error())
-	case errors.Is(err, domain.ErrShowtimeStarted):
-		RespondError(c, nethttp.StatusConflict, "SHOWTIME_STARTED", err.Error())
-	case errors.Is(err, domain.ErrSeatsUnavailable):
-		RespondError(c, nethttp.StatusConflict, "SEATS_UNAVAILABLE", err.Error())
-	default:
-		respondInternalError(c, err)
+	if err != nil {
+		respondBookingError(c, err)
+		return
 	}
+
+	RespondSuccess(c, nethttp.StatusCreated, hold)
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
+	"movie-booking/internal/config"
 	httpdelivery "movie-booking/internal/delivery/http"
 )
 
@@ -34,7 +35,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 func (s *Server) corsConfig() cors.Config {
 	allowedOrigins := s.allowedOrigins
 	if len(allowedOrigins) == 0 {
-		allowedOrigins = DefaultConfig().AllowedOrigins
+		allowedOrigins = config.DefaultHTTP().AllowedOrigins
 	}
 
 	return cors.Config{

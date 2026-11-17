@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
+	"movie-booking/internal/config"
 	httpdelivery "movie-booking/internal/delivery/http"
-	"movie-booking/internal/domain"
 )
 
 type Dependencies struct {
-	UserRepository domain.UserRepository
+	Authenticate   gin.HandlerFunc
 	SystemHandler  *httpdelivery.SystemHandler
 	CatalogHandler *httpdelivery.CatalogHandler
 	BookingHandler *httpdelivery.BookingHandler
@@ -18,7 +20,7 @@ type Dependencies struct {
 }
 
 type Server struct {
-	userRepository domain.UserRepository
+	authenticate   gin.HandlerFunc
 	systemHandler  *httpdelivery.SystemHandler
 	catalogHandler *httpdelivery.CatalogHandler
 	bookingHandler *httpdelivery.BookingHandler
@@ -26,22 +28,21 @@ type Server struct {
 	allowedOrigins []string
 }
 
-func New(config Config, dependencies Dependencies) *http.Server {
-	config = config.withDefaults()
+func New(httpConfig config.HTTP, dependencies Dependencies) *http.Server {
 	app := &Server{
-		userRepository: dependencies.UserRepository,
+		authenticate:   dependencies.Authenticate,
 		systemHandler:  dependencies.SystemHandler,
 		catalogHandler: dependencies.CatalogHandler,
 		bookingHandler: dependencies.BookingHandler,
 		logger:         dependencies.Logger,
-		allowedOrigins: append([]string(nil), config.AllowedOrigins...),
+		allowedOrigins: append([]string(nil), httpConfig.AllowedOrigins...),
 	}
 
 	return &http.Server{
-		Addr:         fmt.Sprintf(":%d", config.Port),
+		Addr:         fmt.Sprintf(":%d", httpConfig.Port),
 		Handler:      app.RegisterRoutes(),
-		IdleTimeout:  config.IdleTimeout,
-		ReadTimeout:  config.ReadTimeout,
-		WriteTimeout: config.WriteTimeout,
+		IdleTimeout:  httpConfig.IdleTimeout,
+		ReadTimeout:  httpConfig.ReadTimeout,
+		WriteTimeout: httpConfig.WriteTimeout,
 	}
 }

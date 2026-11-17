@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"movie-booking/internal/domain"
+	"movie-booking/internal/notification"
 )
 
 type SeatLocker interface {
@@ -23,14 +24,10 @@ type SeatLocker interface {
 	Release(ctx context.Context, showtimeID int64, seatIDs []int64, owner string) error
 }
 
-type BookingConfirmationEnqueuer interface {
-	EnqueueBookingConfirmation(context.Context, *domain.ConfirmedBooking) error
-}
-
 type BookingService struct {
 	repository domain.BookingRepository
 	locker     SeatLocker
-	enqueuer   BookingConfirmationEnqueuer
+	enqueuer   notification.BookingConfirmationEnqueuer
 	logger     *slog.Logger
 	holdTTL    time.Duration
 	timeout    time.Duration
@@ -39,7 +36,7 @@ type BookingService struct {
 func NewBookingService(
 	repository domain.BookingRepository,
 	locker SeatLocker,
-	enqueuer BookingConfirmationEnqueuer,
+	enqueuer notification.BookingConfirmationEnqueuer,
 	logger *slog.Logger,
 	holdTTL time.Duration,
 ) *BookingService {

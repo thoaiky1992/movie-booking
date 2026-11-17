@@ -4,20 +4,23 @@ import (
 	"context"
 	"log/slog"
 
-	"movie-booking/internal/database"
-	"movie-booking/internal/repository/postgres"
-	"movie-booking/internal/worker"
+	appconfig "movie-booking/internal/config"
+	worker "movie-booking/internal/delivery/worker"
+	"movie-booking/internal/infrastructure/postgres"
 )
 
-func runRatingUpdaterWorker(ctx context.Context, logger *slog.Logger) error {
-	db := database.New()
+func runRatingUpdaterWorker(ctx context.Context, config appconfig.Config, logger *slog.Logger) error {
+	db, err := postgres.New(config.Database)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if err := db.Close(); err != nil {
 			logger.Error("database_close_failed", "error", err)
 		}
 	}()
 
-	interval := durationFromSeconds("RATING_UPDATE_INTERVAL_SECONDS", 30)
+	interval := config.Workers.RatingUpdaterInterval
 	repository := postgres.NewExternalRatingRepository(db.DB())
 	ratingUpdater := worker.NewRatingUpdater(repository, logger, interval)
 

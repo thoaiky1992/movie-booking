@@ -2,8 +2,6 @@ package server
 
 import (
 	"github.com/gin-gonic/gin"
-
-	httpdelivery "movie-booking/internal/delivery/http"
 )
 
 func (s *Server) registerSystemRoutes(router *gin.Engine) {
@@ -12,6 +10,8 @@ func (s *Server) registerSystemRoutes(router *gin.Engine) {
 }
 
 func (s *Server) registerAPIRoutes(api *gin.RouterGroup) {
+	api.Use(s.authenticate)
+
 	api.GET("/cinemas", s.catalogHandler.ListCinemas)
 	api.GET("/cinemas/:cinemaID/movies", s.catalogHandler.ListMoviesByCinema)
 	api.GET("/movies/:movieID", s.catalogHandler.GetMovieDetail)
@@ -21,8 +21,7 @@ func (s *Server) registerAPIRoutes(api *gin.RouterGroup) {
 	)
 	api.GET("/showtimes/:showtimeID/seats", s.catalogHandler.GetSeatMap)
 
-	authenticate := httpdelivery.AuthMiddleware(s.userRepository)
-	api.POST("/showtimes/:showtimeID/holds", authenticate, s.bookingHandler.HoldSeats)
-	api.POST("/bookings/:bookingID/confirm", authenticate, s.bookingHandler.ConfirmBooking)
-	api.POST("/bookings/:bookingID/cancel", authenticate, s.bookingHandler.CancelBooking)
+	api.POST("/showtimes/:showtimeID/holds", s.bookingHandler.HoldSeats)
+	api.POST("/bookings/:bookingID/confirm", s.bookingHandler.ConfirmBooking)
+	api.POST("/bookings/:bookingID/cancel", s.bookingHandler.CancelBooking)
 }

@@ -7,26 +7,25 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/hibiken/asynq"
 	redisclient "github.com/redis/go-redis/v9"
 
-	"movie-booking/internal/database"
+	appconfig "movie-booking/internal/config"
 	httpdelivery "movie-booking/internal/delivery/http"
-	"movie-booking/internal/notification"
-	"movie-booking/internal/repository/postgres"
-	redisrepository "movie-booking/internal/repository/redis"
+	asynqinfra "movie-booking/internal/infrastructure/asynq"
+	"movie-booking/internal/infrastructure/postgres"
+	redisinfra "movie-booking/internal/infrastructure/redis"
 	"movie-booking/internal/server"
 	"movie-booking/internal/usecase"
 )
 
 type application struct {
 	httpServer    *http.Server
-	database      database.Service
+	database      *postgres.Database
 	redisClient   *redisclient.Client
-	emailEnqueuer *notification.AsynqEnqueuer
+	emailEnqueuer *asynqinfra.BookingConfirmationEnqueuer
 }
 
-func run(ctx context.Context, config apiConfig, logger *slog.Logger) (err error) {
+func run(ctx context.Context, config appconfig.Config, logger *slog.Logger) (err error) {
 	app, err := newApplication(config, logger)
 	if err != nil {
 		return err
@@ -35,48 +34,52 @@ func run(ctx context.Context, config apiConfig, logger *slog.Logger) (err error)
 		err = errors.Join(err, app.close())
 	}()
 
-	return server.Run(ctx, app.httpServer, logger, config.shutdownTimeout)
+	return server.Run(ctx, app.httpServer, logger, config.HTTP.ShutdownTimeout)
 }
 
-func newApplication(config apiConfig, logger *slog.Logger) (_ *application, err error) {
-	app := &application{database: database.New()}
+func newApplication(config appconfig.Config, logger *slog.Logger) (_ *application, err error) {
+	// Initialize the database connection.
+	database, err := postgres.New(config.Database)
+	if err != nil {
+		return nil, err
+	}
+	app := &application{database: database}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, app.close())
 		}
 	}()
-	// Initialize the Redis client and seat locker
-	seatLocker := app.configureRedis(config.redisURL, logger)
+	// Initialize the Redis client and seat locker.
+	seatLocker := app.configureRedis(config.Redis.URL, logger)
 
-	// Initialize the Asynq client for email notifications
-	asynqRedisOption, err := asynq.ParseRedisURI(config.redisURL)
+	// Initialize the Asynq client for email notifications.
+	app.emailEnqueuer, err = asynqinfra.NewBookingConfirmationEnqueuer(config.Redis.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse Asynq Redis configuration: %w", err)
+		return nil, err
 	}
-	app.emailEnqueuer = notification.NewAsynqEnqueuer(asynqRedisOption)
 
-	// Initialize the database connection
+	// Initialize the catalog service and handler.
 	catalogRepository := postgres.NewCatalogRepository(app.database.DB())
 	catalogService := usecase.NewCatalogService(catalogRepository)
 	catalogHandler := httpdelivery.NewCatalogHandler(catalogService)
 
-	// Initialize the booking service and handler
+	// Initialize the booking service and handler.
 	bookingRepository := postgres.NewBookingRepository(app.database.DB())
 	bookingService := usecase.NewBookingService(
 		bookingRepository,
 		seatLocker,
 		app.emailEnqueuer,
 		logger,
-		config.seatHoldTTL,
+		config.Booking.SeatHoldTTL,
 	)
 	bookingHandler := httpdelivery.NewBookingHandler(bookingService)
 
-	// Initialize the user repository and system handler
+	// Initialize authentication and system handlers.
 	userRepository := postgres.NewUserRepository(app.database.DB())
 	systemHandler := httpdelivery.NewSystemHandler(app.database)
 
-	app.httpServer = server.New(config.http, server.Dependencies{
-		UserRepository: userRepository,
+	app.httpServer = server.New(config.HTTP, server.Dependencies{
+		Authenticate:   httpdelivery.AuthMiddleware(userRepository),
 		SystemHandler:  systemHandler,
 		CatalogHandler: catalogHandler,
 		BookingHandler: bookingHandler,
@@ -88,14 +91,14 @@ func newApplication(config apiConfig, logger *slog.Logger) (_ *application, err 
 func (a *application) configureRedis(
 	redisURL string,
 	logger *slog.Logger,
-) *redisrepository.SeatLocker {
-	client, err := redisrepository.NewClient(redisURL)
+) *redisinfra.SeatLocker {
+	client, err := redisinfra.NewClient(redisURL)
 	if err != nil {
 		logger.Warn("redis_seat_locker_disabled", "error", err)
 		return nil
 	}
 	a.redisClient = client
-	return redisrepository.NewSeatLocker(client)
+	return redisinfra.NewSeatLocker(client)
 }
 
 func (a *application) close() error {

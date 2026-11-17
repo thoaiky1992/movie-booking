@@ -8,11 +8,13 @@ import (
 	"syscall"
 
 	"github.com/gin-gonic/gin"
+
+	appconfig "movie-booking/internal/config"
 )
 
 func main() {
-	config := loadConfig()
-	logger := newLogger(config.logLevel)
+	config := appconfig.Load()
+	logger := newLogger(config.LogLevel)
 	slog.SetDefault(logger)
 	gin.SetMode(gin.ReleaseMode)
 

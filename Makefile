@@ -66,7 +66,7 @@ loadtest-hot-seat:
 # Integrations Tests for the application
 itest:
 	@echo "Running integration tests..."
-	@go test ./internal/database -v
+	@go test ./internal/infrastructure/postgres -v
 
 # Create a new SQL migration: make migration-create name=create_movies
 migration-create:

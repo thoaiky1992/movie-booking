@@ -4,27 +4,29 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/hibiken/asynq"
 
+	appconfig "movie-booking/internal/config"
+	worker "movie-booking/internal/delivery/worker"
+	"movie-booking/internal/infrastructure/mailer"
 	"movie-booking/internal/notification"
 )
 
-func runEmailWorker(ctx context.Context, logger *slog.Logger) error {
-	redisOption, err := asynq.ParseRedisURI(configuredRedisURL())
+func runEmailWorker(ctx context.Context, config appconfig.Config, logger *slog.Logger) error {
+	redisOption, err := asynq.ParseRedisURI(config.Redis.URL)
 	if err != nil {
 		return fmt.Errorf("parse Asynq Redis configuration: %w", err)
 	}
 
-	handler := notification.NewBookingConfirmationHandler(notification.NewMockMailer(logger))
+	handler := worker.NewBookingConfirmationHandler(mailer.NewMock(logger))
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(notification.BookingConfirmationTaskType, handler.ProcessTask)
-	concurrency := intFromEnv("ASYNQ_CONCURRENCY", 5)
+	concurrency := config.Workers.AsynqConcurrency
 	server := asynq.NewServer(redisOption, asynq.Config{
 		Concurrency:     concurrency,
 		Queues:          map[string]int{notification.EmailQueue: 1},
-		ShutdownTimeout: 10 * time.Second,
+		ShutdownTimeout: config.Workers.AsynqShutdownTimeout,
 		BaseContext: func() context.Context {
 			return ctx
 		},

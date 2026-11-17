@@ -7,21 +7,24 @@ import (
 
 	redisclient "github.com/redis/go-redis/v9"
 
-	"movie-booking/internal/database"
-	"movie-booking/internal/repository/postgres"
-	redisrepository "movie-booking/internal/repository/redis"
-	"movie-booking/internal/worker"
+	appconfig "movie-booking/internal/config"
+	worker "movie-booking/internal/delivery/worker"
+	"movie-booking/internal/infrastructure/postgres"
+	redisinfra "movie-booking/internal/infrastructure/redis"
 )
 
-func runHoldExpiryWorker(ctx context.Context, logger *slog.Logger) error {
-	db := database.New()
+func runHoldExpiryWorker(ctx context.Context, config appconfig.Config, logger *slog.Logger) error {
+	db, err := postgres.New(config.Database)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if err := db.Close(); err != nil {
 			logger.Error("database_close_failed", "error", err)
 		}
 	}()
 
-	redisClient, seatLocker, err := newRedis()
+	redisClient, seatLocker, err := newRedis(config.Redis.URL)
 	if err != nil {
 		logger.Warn("redis_disabled", "error", err)
 	}
@@ -34,8 +37,8 @@ func runHoldExpiryWorker(ctx context.Context, logger *slog.Logger) error {
 	}
 
 	bookingRepository := postgres.NewBookingRepository(db.DB())
-	interval := durationFromSeconds("HOLD_EXPIRY_INTERVAL_SECONDS", 5)
-	batchSize := intFromEnv("HOLD_EXPIRY_BATCH_SIZE", 100)
+	interval := config.Workers.HoldExpiryInterval
+	batchSize := config.Workers.HoldExpiryBatchSize
 	expiryWorker := worker.NewHoldExpiryWorker(
 		bookingRepository,
 		seatLocker,
@@ -54,10 +57,10 @@ func runHoldExpiryWorker(ctx context.Context, logger *slog.Logger) error {
 	return nil
 }
 
-func newRedis() (*redisclient.Client, *redisrepository.SeatLocker, error) {
-	client, err := redisrepository.NewClient(configuredRedisURL())
+func newRedis(redisURL string) (*redisclient.Client, *redisinfra.SeatLocker, error) {
+	client, err := redisinfra.NewClient(redisURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create Redis client: %w", err)
 	}
-	return client, redisrepository.NewSeatLocker(client), nil
+	return client, redisinfra.NewSeatLocker(client), nil
 }
