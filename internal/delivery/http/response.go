@@ -1,6 +1,10 @@
 package http
 
-import "github.com/gin-gonic/gin"
+import (
+	nethttp "net/http"
+
+	"github.com/gin-gonic/gin"
+)
 
 // SuccessResponse is the common envelope returned by successful endpoints.
 type SuccessResponse struct {
@@ -39,4 +43,10 @@ func RespondError(c *gin.Context, status int, code, message string) {
 		},
 		TraceID: EnsureTraceID(c),
 	})
+}
+
+// RespondInternalError records the original error and returns a safe response.
+func RespondInternalError(c *gin.Context, err error) {
+	_ = c.Error(err)
+	RespondError(c, nethttp.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
 }

@@ -7,12 +7,14 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"movie-booking/internal/notification"
+	"movie-booking/internal/usecase/interfaces"
 )
 
 type Mock struct {
 	logger *slog.Logger
 }
+
+var _ interfaces.Mailer = (*Mock)(nil)
 
 func NewMock(logger *slog.Logger) *Mock {
 	return &Mock{logger: logger}
@@ -20,7 +22,7 @@ func NewMock(logger *slog.Logger) *Mock {
 
 func (m *Mock) SendBookingConfirmation(
 	ctx context.Context,
-	payload notification.BookingConfirmationPayload,
+	email interfaces.BookingConfirmationEmail,
 ) error {
 	delay := time.Second + time.Duration(rand.IntN(1001))*time.Millisecond
 	timer := time.NewTimer(delay)
@@ -34,8 +36,8 @@ func (m *Mock) SendBookingConfirmation(
 	m.logger.InfoContext(
 		ctx,
 		"mock_booking_confirmation_email_sent",
-		"booking_id", payload.BookingID,
-		"recipient", payload.RecipientEmail,
+		"booking_id", email.BookingID,
+		"recipient", email.RecipientEmail,
 		"duration_ms", delay.Milliseconds(),
 		"message", "booking confirmation email sent successfully",
 	)

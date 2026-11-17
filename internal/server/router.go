@@ -8,15 +8,16 @@ import (
 
 	"movie-booking/internal/config"
 	httpdelivery "movie-booking/internal/delivery/http"
+	"movie-booking/internal/delivery/http/middlewares"
 )
 
 func (s *Server) RegisterRoutes() http.Handler {
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
 	router.Use(
-		httpdelivery.TraceIDMiddleware(),
-		httpdelivery.RequestLogger(s.logger),
-		httpdelivery.Recovery(s.logger),
+		middlewares.TraceID(),
+		middlewares.RequestLogger(s.logger),
+		middlewares.Recovery(s.logger),
 		cors.New(s.corsConfig()),
 	)
 
@@ -46,7 +47,7 @@ func (s *Server) corsConfig() cors.Config {
 			"Authorization",
 			"Content-Type",
 			httpdelivery.TraceIDHeader,
-			httpdelivery.UserIDHeader,
+			middlewares.UserIDHeader,
 		},
 		ExposeHeaders:    []string{httpdelivery.TraceIDHeader},
 		AllowCredentials: true,

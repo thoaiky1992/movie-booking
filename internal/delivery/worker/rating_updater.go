@@ -5,28 +5,28 @@ import (
 	"log/slog"
 	"time"
 
-	"movie-booking/internal/observability"
+	"movie-booking/internal/infrastructure/observability"
 )
 
-type ExternalRatingRandomizer interface {
-	RandomizeOne(ctx context.Context) (int64, error)
+type RatingUpdaterUseCase interface {
+	UpdateOne(ctx context.Context) (int64, error)
 }
 
 type RatingUpdater struct {
-	repository ExternalRatingRandomizer
-	logger     *slog.Logger
-	interval   time.Duration
+	useCase  RatingUpdaterUseCase
+	logger   *slog.Logger
+	interval time.Duration
 }
 
 func NewRatingUpdater(
-	repository ExternalRatingRandomizer,
+	useCase RatingUpdaterUseCase,
 	logger *slog.Logger,
 	interval time.Duration,
 ) *RatingUpdater {
 	return &RatingUpdater{
-		repository: repository,
-		logger:     logger,
-		interval:   interval,
+		useCase:  useCase,
+		logger:   logger,
+		interval: interval,
 	}
 }
 
@@ -50,7 +50,7 @@ func (w *RatingUpdater) runCycle(parentCtx context.Context) {
 	logger := w.logger.With("trace_id", traceID)
 	startedAt := time.Now()
 
-	updated, err := w.repository.RandomizeOne(ctx)
+	updated, err := w.useCase.UpdateOne(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			logger.ErrorContext(

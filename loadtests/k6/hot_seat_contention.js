@@ -51,6 +51,9 @@ export function setup() {
   }
 
   const response = http.get(`${baseURL}/api/v1/showtimes/${showtimeID}/seats`, {
+    headers: {
+      'X-User-ID': String(userIDs[0]),
+    },
     tags: { operation: 'preflight_seat_map' },
   });
   if (response.status !== 200) {

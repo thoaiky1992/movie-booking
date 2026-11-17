@@ -4,39 +4,53 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"net/url"
 	"strconv"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-
-	"movie-booking/internal/config"
 )
+
+// Config holds the settings needed to open a PostgreSQL connection pool.
+type Config struct {
+	Host               string
+	Port               string
+	Name               string
+	Username           string
+	Password           string
+	Schema             string
+	MaxOpenConnections int
+	MaxIdleConnections int
+	MaxLifetime        time.Duration
+	MaxIdleTime        time.Duration
+}
 
 type Database struct {
 	db   *sql.DB
 	name string
 }
 
-func New(databaseConfig config.Database) (*Database, error) {
-	connectionString := fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s?sslmode=disable&search_path=%s",
-		databaseConfig.Username,
-		databaseConfig.Password,
-		databaseConfig.Host,
-		databaseConfig.Port,
-		databaseConfig.Name,
-		databaseConfig.Schema,
-	)
-	db, err := sql.Open("pgx", connectionString)
+func New(cfg Config) (*Database, error) {
+	// url.URL escapes credentials and other components, so special characters
+	// in the password do not corrupt the connection string.
+	connectionURL := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(cfg.Username, cfg.Password),
+		Host:     net.JoinHostPort(cfg.Host, cfg.Port),
+		Path:     cfg.Name,
+		RawQuery: url.Values{"sslmode": {"disable"}, "search_path": {cfg.Schema}}.Encode(),
+	}
+	db, err := sql.Open("pgx", connectionURL.String())
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL connection: %w", err)
 	}
-	db.SetMaxOpenConns(databaseConfig.MaxOpenConnections)
-	db.SetMaxIdleConns(databaseConfig.MaxIdleConnections)
-	db.SetConnMaxLifetime(databaseConfig.MaxLifetime)
-	db.SetConnMaxIdleTime(databaseConfig.MaxIdleTime)
+	db.SetMaxOpenConns(cfg.MaxOpenConnections)
+	db.SetMaxIdleConns(cfg.MaxIdleConnections)
+	db.SetConnMaxLifetime(cfg.MaxLifetime)
+	db.SetConnMaxIdleTime(cfg.MaxIdleTime)
 
-	return &Database{db: db, name: databaseConfig.Name}, nil
+	return &Database{db: db, name: cfg.Name}, nil
 }
 
 func (d *Database) DB() *sql.DB {

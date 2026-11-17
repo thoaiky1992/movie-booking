@@ -11,10 +11,11 @@ import (
 	worker "movie-booking/internal/delivery/worker"
 	"movie-booking/internal/infrastructure/postgres"
 	redisinfra "movie-booking/internal/infrastructure/redis"
+	bookingusecase "movie-booking/internal/usecase/booking"
 )
 
 func runHoldExpiryWorker(ctx context.Context, config appconfig.Config, logger *slog.Logger) error {
-	db, err := postgres.New(config.Database)
+	db, err := newPostgresDatabase(config.Database)
 	if err != nil {
 		return err
 	}
@@ -37,11 +38,11 @@ func runHoldExpiryWorker(ctx context.Context, config appconfig.Config, logger *s
 	}
 
 	bookingRepository := postgres.NewBookingRepository(db.DB())
+	expiryService := bookingusecase.NewHoldExpiryService(bookingRepository, seatLocker)
 	interval := config.Workers.HoldExpiryInterval
 	batchSize := config.Workers.HoldExpiryBatchSize
 	expiryWorker := worker.NewHoldExpiryWorker(
-		bookingRepository,
-		seatLocker,
+		expiryService,
 		logger,
 		interval,
 		batchSize,

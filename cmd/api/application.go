@@ -10,12 +10,17 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 
 	appconfig "movie-booking/internal/config"
-	httpdelivery "movie-booking/internal/delivery/http"
+	bookingdelivery "movie-booking/internal/delivery/http/booking"
+	catalogdelivery "movie-booking/internal/delivery/http/catalog"
+	"movie-booking/internal/delivery/http/middlewares"
+	systemdelivery "movie-booking/internal/delivery/http/system"
 	asynqinfra "movie-booking/internal/infrastructure/asynq"
 	"movie-booking/internal/infrastructure/postgres"
 	redisinfra "movie-booking/internal/infrastructure/redis"
 	"movie-booking/internal/server"
-	"movie-booking/internal/usecase"
+	authenticationusecase "movie-booking/internal/usecase/authentication"
+	bookingusecase "movie-booking/internal/usecase/booking"
+	catalogusecase "movie-booking/internal/usecase/catalog"
 )
 
 type application struct {
@@ -39,7 +44,7 @@ func run(ctx context.Context, config appconfig.Config, logger *slog.Logger) (err
 
 func newApplication(config appconfig.Config, logger *slog.Logger) (_ *application, err error) {
 	// Initialize the database connection.
-	database, err := postgres.New(config.Database)
+	database, err := newPostgresDatabase(config.Database)
 	if err != nil {
 		return nil, err
 	}
@@ -60,26 +65,27 @@ func newApplication(config appconfig.Config, logger *slog.Logger) (_ *applicatio
 
 	// Initialize the catalog service and handler.
 	catalogRepository := postgres.NewCatalogRepository(app.database.DB())
-	catalogService := usecase.NewCatalogService(catalogRepository)
-	catalogHandler := httpdelivery.NewCatalogHandler(catalogService)
+	catalogService := catalogusecase.NewCatalogService(catalogRepository)
+	catalogHandler := catalogdelivery.NewHandler(catalogService)
 
 	// Initialize the booking service and handler.
 	bookingRepository := postgres.NewBookingRepository(app.database.DB())
-	bookingService := usecase.NewBookingService(
+	bookingService := bookingusecase.NewBookingService(
 		bookingRepository,
 		seatLocker,
 		app.emailEnqueuer,
 		logger,
 		config.Booking.SeatHoldTTL,
 	)
-	bookingHandler := httpdelivery.NewBookingHandler(bookingService)
+	bookingHandler := bookingdelivery.NewHandler(bookingService)
 
 	// Initialize authentication and system handlers.
 	userRepository := postgres.NewUserRepository(app.database.DB())
-	systemHandler := httpdelivery.NewSystemHandler(app.database)
+	authenticationService := authenticationusecase.NewAuthenticationService(userRepository)
+	systemHandler := systemdelivery.NewHandler(app.database)
 
 	app.httpServer = server.New(config.HTTP, server.Dependencies{
-		Authenticate:   httpdelivery.AuthMiddleware(userRepository),
+		Authenticate:   middlewares.Auth(authenticationService),
 		SystemHandler:  systemHandler,
 		CatalogHandler: catalogHandler,
 		BookingHandler: bookingHandler,
@@ -119,4 +125,19 @@ func (a *application) close() error {
 		}
 	}
 	return errors.Join(closeErrors...)
+}
+
+func newPostgresDatabase(cfg appconfig.Database) (*postgres.Database, error) {
+	return postgres.New(postgres.Config{
+		Host:               cfg.Host,
+		Port:               cfg.Port,
+		Name:               cfg.Name,
+		Username:           cfg.Username,
+		Password:           cfg.Password,
+		Schema:             cfg.Schema,
+		MaxOpenConnections: cfg.MaxOpenConnections,
+		MaxIdleConnections: cfg.MaxIdleConnections,
+		MaxLifetime:        cfg.MaxLifetime,
+		MaxIdleTime:        cfg.MaxIdleTime,
+	})
 }

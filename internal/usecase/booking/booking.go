@@ -1,45 +1,36 @@
-package usecase
+package booking
 
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
 
 	"movie-booking/internal/domain"
-	"movie-booking/internal/notification"
+	"movie-booking/internal/usecase/interfaces"
 )
 
-type SeatLocker interface {
-	Acquire(
-		ctx context.Context,
-		showtimeID int64,
-		seatIDs []int64,
-		owner string,
-		ttl time.Duration,
-	) (bool, error)
-	Release(ctx context.Context, showtimeID int64, seatIDs []int64, owner string) error
-}
-
 type BookingService struct {
-	repository domain.BookingRepository
-	locker     SeatLocker
-	enqueuer   notification.BookingConfirmationEnqueuer
-	logger     *slog.Logger
+	repository interfaces.BookingRepository
+	locker     interfaces.SeatLocker
+	enqueuer   interfaces.BookingConfirmationEnqueuer
+	logger     interfaces.Logger
 	holdTTL    time.Duration
 	timeout    time.Duration
 }
 
 func NewBookingService(
-	repository domain.BookingRepository,
-	locker SeatLocker,
-	enqueuer notification.BookingConfirmationEnqueuer,
-	logger *slog.Logger,
+	repository interfaces.BookingRepository,
+	locker interfaces.SeatLocker,
+	enqueuer interfaces.BookingConfirmationEnqueuer,
+	logger interfaces.Logger,
 	holdTTL time.Duration,
 ) *BookingService {
+	if logger == nil {
+		logger = discardLogger{}
+	}
 	return &BookingService{
 		repository: repository,
 		locker:     locker,
@@ -69,7 +60,12 @@ func (s *BookingService) ConfirmBooking(
 		// Queue the booking confirmation email asynchronously.
 		// If this fails, we log the error but do not fail the booking confirmation.
 		if err := s.enqueuer.EnqueueBookingConfirmation(ctx, confirmed); err != nil {
-			return nil, fmt.Errorf("queue booking confirmation email: %w", err)
+			s.logger.ErrorContext(
+				ctx,
+				"booking_confirmation_enqueue_failed",
+				"booking_id", confirmed.BookingID,
+				"error", err,
+			)
 		}
 	}
 
@@ -85,7 +81,7 @@ func (s *BookingService) ConfirmBooking(
 		if releaseErr != nil {
 			// PostgreSQL already owns the confirmed seats; Redis TTL bounds the
 			// lifetime of this now-redundant hold.
-			s.logger.Warn("redis_confirmed_hold_release_failed", "error", releaseErr)
+			s.logger.WarnContext(ctx, "redis_confirmed_hold_release_failed", "error", releaseErr)
 		}
 	}
 	return confirmed, nil
@@ -122,7 +118,7 @@ func (s *BookingService) HoldSeats(
 		if err != nil {
 			// PostgreSQL is the source of truth. A Redis outage increases database
 			// contention, but must not make the correctness invariant unavailable.
-			s.logger.Warn("redis_seat_lock_unavailable", "error", err)
+			s.logger.WarnContext(ctx, "redis_seat_lock_unavailable", "error", err)
 		} else if !acquired {
 			// The seats are already held by another user
 			return nil, domain.ErrSeatsUnavailable
@@ -153,7 +149,7 @@ func (s *BookingService) HoldSeats(
 			seatIDs,
 			holdToken,
 		); releaseErr != nil {
-			s.logger.Warn("redis_seat_lock_rollback_failed", "error", releaseErr)
+			s.logger.WarnContext(ctx, "redis_seat_lock_rollback_failed", "error", releaseErr)
 		}
 	}
 	return nil, fmt.Errorf("hold seats: %w", err)
@@ -185,10 +181,21 @@ func (s *BookingService) CancelBooking(
 		releaseCancel()
 		if releaseErr != nil {
 			// PostgreSQL is authoritative; Redis TTL still bounds a stale lock.
-			s.logger.Warn("redis_cancelled_hold_release_failed", "error", releaseErr)
+			s.logger.WarnContext(ctx, "redis_cancelled_hold_release_failed", "error", releaseErr)
 		}
 	}
 	return cancelled, nil
+}
+
+// discardLogger is used when no logger is injected.
+type discardLogger struct{}
+
+func (discardLogger) WarnContext(context.Context, string, ...any) {
+	// Intentionally empty: logging is disabled when no logger is injected.
+}
+
+func (discardLogger) ErrorContext(context.Context, string, ...any) {
+	// Intentionally empty: logging is disabled when no logger is injected.
 }
 
 func normalizeAndValidateHold(userID, showtimeID int64, seatIDs []int64) ([]int64, error) {

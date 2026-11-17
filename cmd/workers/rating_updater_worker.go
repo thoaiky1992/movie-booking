@@ -7,10 +7,11 @@ import (
 	appconfig "movie-booking/internal/config"
 	worker "movie-booking/internal/delivery/worker"
 	"movie-booking/internal/infrastructure/postgres"
+	catalogusecase "movie-booking/internal/usecase/catalog"
 )
 
 func runRatingUpdaterWorker(ctx context.Context, config appconfig.Config, logger *slog.Logger) error {
-	db, err := postgres.New(config.Database)
+	db, err := newPostgresDatabase(config.Database)
 	if err != nil {
 		return err
 	}
@@ -22,7 +23,8 @@ func runRatingUpdaterWorker(ctx context.Context, config appconfig.Config, logger
 
 	interval := config.Workers.RatingUpdaterInterval
 	repository := postgres.NewExternalRatingRepository(db.DB())
-	ratingUpdater := worker.NewRatingUpdater(repository, logger, interval)
+	ratingService := catalogusecase.NewRatingService(repository)
+	ratingUpdater := worker.NewRatingUpdater(ratingService, logger, interval)
 
 	logger.Info("rating_updater_worker_started", "interval", interval.String())
 	ratingUpdater.Run(ctx)

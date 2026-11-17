@@ -8,22 +8,24 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"movie-booking/internal/config"
-	httpdelivery "movie-booking/internal/delivery/http"
+	bookingdelivery "movie-booking/internal/delivery/http/booking"
+	catalogdelivery "movie-booking/internal/delivery/http/catalog"
+	systemdelivery "movie-booking/internal/delivery/http/system"
 )
 
 type Dependencies struct {
 	Authenticate   gin.HandlerFunc
-	SystemHandler  *httpdelivery.SystemHandler
-	CatalogHandler *httpdelivery.CatalogHandler
-	BookingHandler *httpdelivery.BookingHandler
+	SystemHandler  *systemdelivery.Handler
+	CatalogHandler *catalogdelivery.Handler
+	BookingHandler *bookingdelivery.Handler
 	Logger         *slog.Logger
 }
 
 type Server struct {
 	authenticate   gin.HandlerFunc
-	systemHandler  *httpdelivery.SystemHandler
-	catalogHandler *httpdelivery.CatalogHandler
-	bookingHandler *httpdelivery.BookingHandler
+	systemHandler  *systemdelivery.Handler
+	catalogHandler *catalogdelivery.Handler
+	bookingHandler *bookingdelivery.Handler
 	logger         *slog.Logger
 	allowedOrigins []string
 }

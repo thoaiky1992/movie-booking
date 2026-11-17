@@ -1,4 +1,4 @@
-package usecase
+package catalog
 
 import (
 	"context"
@@ -6,14 +6,15 @@ import (
 	"time"
 
 	"movie-booking/internal/domain"
+	"movie-booking/internal/usecase/interfaces"
 )
 
 type CatalogService struct {
-	repository domain.CatalogRepository
+	repository interfaces.CatalogRepository
 	timeout    time.Duration
 }
 
-func NewCatalogService(repository domain.CatalogRepository) *CatalogService {
+func NewCatalogService(repository interfaces.CatalogRepository) *CatalogService {
 	return &CatalogService{
 		repository: repository,
 		timeout:    3 * time.Second,
@@ -32,6 +33,10 @@ func (s *CatalogService) ListCinemas(ctx context.Context) ([]domain.Cinema, erro
 }
 
 func (s *CatalogService) ListMoviesByCinema(ctx context.Context, cinemaID int64) ([]domain.Movie, error) {
+	if cinemaID <= 0 {
+		return nil, domain.ErrInvalidCinemaID
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -43,6 +48,10 @@ func (s *CatalogService) ListMoviesByCinema(ctx context.Context, cinemaID int64)
 }
 
 func (s *CatalogService) GetMovieDetail(ctx context.Context, movieID int64) (*domain.MovieDetail, error) {
+	if movieID <= 0 {
+		return nil, domain.ErrInvalidMovieID
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -57,6 +66,13 @@ func (s *CatalogService) ListShowtimesByCinemaAndMovie(
 	ctx context.Context,
 	cinemaID, movieID int64,
 ) ([]domain.Showtime, error) {
+	if cinemaID <= 0 {
+		return nil, domain.ErrInvalidCinemaID
+	}
+	if movieID <= 0 {
+		return nil, domain.ErrInvalidMovieID
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -68,6 +84,10 @@ func (s *CatalogService) ListShowtimesByCinemaAndMovie(
 }
 
 func (s *CatalogService) GetSeatMap(ctx context.Context, showtimeID int64) (*domain.SeatMap, error) {
+	if showtimeID <= 0 {
+		return nil, domain.ErrInvalidShowtimeID
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 

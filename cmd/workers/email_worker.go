@@ -9,8 +9,9 @@ import (
 
 	appconfig "movie-booking/internal/config"
 	worker "movie-booking/internal/delivery/worker"
+	asynqinfra "movie-booking/internal/infrastructure/asynq"
 	"movie-booking/internal/infrastructure/mailer"
-	"movie-booking/internal/notification"
+	bookingusecase "movie-booking/internal/usecase/booking"
 )
 
 func runEmailWorker(ctx context.Context, config appconfig.Config, logger *slog.Logger) error {
@@ -19,13 +20,14 @@ func runEmailWorker(ctx context.Context, config appconfig.Config, logger *slog.L
 		return fmt.Errorf("parse Asynq Redis configuration: %w", err)
 	}
 
-	handler := worker.NewBookingConfirmationHandler(mailer.NewMock(logger))
+	confirmationService := bookingusecase.NewBookingConfirmationService(mailer.NewMock(logger))
+	handler := worker.NewBookingConfirmationHandler(confirmationService)
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(notification.BookingConfirmationTaskType, handler.ProcessTask)
+	mux.HandleFunc(asynqinfra.BookingConfirmationTaskType, handler.ProcessTask)
 	concurrency := config.Workers.AsynqConcurrency
 	server := asynq.NewServer(redisOption, asynq.Config{
 		Concurrency:     concurrency,
-		Queues:          map[string]int{notification.EmailQueue: 1},
+		Queues:          map[string]int{asynqinfra.EmailQueue: 1},
 		ShutdownTimeout: config.Workers.AsynqShutdownTimeout,
 		BaseContext: func() context.Context {
 			return ctx
