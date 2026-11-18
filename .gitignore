@@ -27,6 +27,7 @@ tmp/
 
 # Project build
 main
+movie-booking
 *templ.go
 
 # OS X generated file

@@ -1,0 +1,6 @@
+.git
+.gitignore
+.env
+movie-booking
+tmp
+*.out

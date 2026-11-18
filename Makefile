@@ -2,8 +2,8 @@
 
 GOOSE ?= go tool goose
 GOOSE_DRIVER ?= postgres
-GOOSE_MIGRATION_DIR ?= migrations
-DATABASE_URL ?= postgres://$(BLUEPRINT_DB_USERNAME):$(BLUEPRINT_DB_PASSWORD)@$(BLUEPRINT_DB_HOST):$(BLUEPRINT_DB_PORT)/$(BLUEPRINT_DB_DATABASE)?sslmode=disable&search_path=$(BLUEPRINT_DB_SCHEMA)
+GOOSE_MIGRATION_DIR ?= database/migrations
+DATABASE_URL ?= postgres://$(DB_USERNAME):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_DATABASE)?sslmode=disable&search_path=$(DB_SCHEMA)
 
 -include .env
 
@@ -14,26 +14,26 @@ build:
 	@echo "Building..."
 	
 	
-	@go build -o main ./cmd/api
+	@go build -o movie-booking .
 
 # Run the application
 run:
-	@go run ./cmd/api
+	@go run . server
 
 # Run the seat-hold expiry worker as a separate process.
 run-hold-expiry-worker:
-	@go run ./cmd/workers hold-expiry
+	@go run . worker hold-expiry
 
 # Backward-compatible alias.
 run-worker: run-hold-expiry-worker
 
 # Run the Asynq booking-confirmation email worker as a separate process.
 run-email-worker:
-	@go run ./cmd/workers email
+	@go run . worker email
 
 # Run the random external-rating updater as a separate process.
 run-rating-updater-worker:
-	@go run ./cmd/workers rating-updater
+	@go run . worker rating-updater
 # Create DB container
 docker-run:
 	@if docker compose up --build 2>/dev/null; then \
@@ -66,7 +66,7 @@ loadtest-hot-seat:
 # Integrations Tests for the application
 itest:
 	@echo "Running integration tests..."
-	@go test ./internal/infrastructure/postgres -v
+	@go test ./modules/booking/infrastructure/persistence ./modules/catalog/infrastructure/persistence -v
 
 # Create a new SQL migration: make migration-create name=create_movies
 migration-create:
@@ -88,7 +88,7 @@ migration-status:
 # Clean the binary
 clean:
 	@echo "Cleaning..."
-	@rm -f main
+	@rm -f movie-booking
 
 # Live Reload
 watch:

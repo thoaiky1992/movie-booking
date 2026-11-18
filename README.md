@@ -1,8 +1,26 @@
 # Movie Booking System
 
-Backend đặt vé dùng Go/Gin, PostgreSQL, Redis và Goose. PostgreSQL là nguồn sự
+Backend đặt vé dùng Go/Gin, Uber Fx, Cobra, PostgreSQL, Redis và Goose. PostgreSQL là nguồn sự
 thật cho booking/seat ownership; Redis giảm tranh chấp ở đường ghi nóng và cung
 cấp TTL nhanh cho seat hold.
+
+## Architecture
+
+Project follows Clean Architecture with feature-first bounded contexts:
+
+```text
+main.go                    Cobra entrypoint
+cmd/                       server, worker, migration, seed commands
+internal/server/           HTTP/Fx bootstrap
+internal/worker/           worker/Fx bootstrap
+modules/<feature>/         domain, application, infrastructure, presentation
+shared/                    config, HTTP and observability concerns
+database/                  connection, migrations and seed lifecycle
+proto/                     future gRPC contracts
+```
+
+Dependencies point inward: presentation and infrastructure depend on
+application/domain contracts; application and domain never import adapters.
 
 ## Getting Started
 
@@ -42,8 +60,8 @@ make itest
 ## Database migrations
 
 The project uses [Goose](https://github.com/pressly/goose) for PostgreSQL
-migrations. Migration files live in `migrations/`. The Makefile reads the
-existing `BLUEPRINT_DB_*` values from `.env`, so start PostgreSQL before
+migrations. Migration files live in `database/migrations/`. The Makefile reads the
+existing `DB_*` values from `.env`, so start PostgreSQL before
 applying migrations:
 
 ```bash
@@ -62,6 +80,14 @@ Check migration status or roll back the latest migration:
 ```bash
 make migration-status
 make migration-down
+```
+
+The same operations are exposed by the application CLI:
+
+```bash
+go run . migration up
+go run . migration status
+go run . seed
 ```
 
 Goose is pinned as a Go tool in `go.mod`; Go downloads it automatically on the
